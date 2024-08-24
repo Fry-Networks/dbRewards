@@ -69,10 +69,10 @@ const main = async () => {
             }
             let amount;
             const address = device.reward_wallet!;
-            if (product.need_transactions) {
+            if (product.type === "hardware") {
 
 
-                
+
                 const transactionsNeeded = 24;
                 //Calculate the amount of FRY to send for the devices that need transactions (POC)
                 const lastTransactions = await indexer.lookupAccountTransactions(address).limit(transactionsNeeded + 150).do();
@@ -100,18 +100,18 @@ const main = async () => {
                 }
 
                 const reward = (device.verified ? product?.reward.verified : product?.reward.unverified) ?? 0
-                amount = Math.floor(Math.round(reward * mult * 100) / 100)
-                console.log(`amount for ${device.miner_key} is ${amount*globalMulitplier} -- ${lastTransactionsInLast24Hours.length} transactions in the last 24 hours}`)
+                amount = Math.floor(device.byod ? Math.round(reward * mult * 100) / 200 : Math.round(reward * mult * 100) / 100) //byod devices get half the reward
+                console.log(`amount for ${device.miner_key} is ${amount * globalMulitplier} -- ${lastTransactionsInLast24Hours.length} transactions in the last 24 hours}`)
             } else {
                 amount = (device.verified ? product?.reward.verified : product?.reward.unverified) ?? 0
-                    console.log(`amount for ${device.miner_key} is ${amount*globalMulitplier}`)
+                console.log(`amount for ${device.miner_key} is ${amount * globalMulitplier}`)
             }
             //Calculate the total amount of FRY to send
             const amountToSend = (amount) * globalMulitplier;
 
 
 
-           
+
 
             if (amountToSend > 0) {
 

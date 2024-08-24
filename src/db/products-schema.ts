@@ -9,6 +9,7 @@ export const productsSchema = new mongoose.Schema({
         verified: { type: Number, default: 0}
     },
     created_at: { type: Date, default: Date.now },
+    type: { type: String, required: false },
     need_transactions: { type: Boolean, default: false, required: false },
  
 });
@@ -20,6 +21,7 @@ export interface Product extends mongoose.Document {
         unverified: number,
         verified: number,
     },
+    type: string,
     created_at: Date,
     need_transactions?: boolean,
 

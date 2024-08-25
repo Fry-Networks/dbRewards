@@ -5,22 +5,22 @@ export const devicesSchema = new mongoose.Schema({
     name: String,
     created_at: { type: Date, default: Date.now },
     is_registered: { type: Boolean, default: false },
-    registered_at: Date,
     verified: { type: Boolean, default: false },
-    verified_at: { type: Date, default: null },
-    need_transactions: { type: Boolean, default: false },
+    reward_wallet: String,
+    address: String,
+    byod: { type: String, default: "" },
  
 });
 export interface Device extends mongoose.Document {
 	user_id: mongoose.Schema.Types.ObjectId | string,
     miner_key: string,
     name: string,
+    address: string,
     created_at: Date,
     is_registered: boolean,
-    registered_at: Date,
     verified: boolean,
-    verified_at: Date | null,
-    need_transactions: boolean
+    reward_wallet: string,
+    byod?: string
 }
 
 export const DeviceModel = mongoose.model<Device>('devices', devicesSchema);

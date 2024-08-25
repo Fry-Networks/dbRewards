@@ -14,7 +14,7 @@ const indexer = new Indexer(tokenToSend, indexServer, port);
 
 import config from '../config.json'
 import { connect, getConnection } from './db/connect';
-import { DeviceModel } from './db/devices-schema';
+import { Device, DeviceModel } from './db/devices-schema';
 import 'dotenv/config';
 import { ProductModel } from './db/products-schema';
 import * as forge from 'node-forge';
@@ -40,21 +40,21 @@ function decryptWithPrivateKey(privateKeyPem: string, encryptedData: string): st
 
 
 const main = async () => {
-    //await filterDuplicates(config.excel_file_name);
     await connect();
     const connection = getConnection();
     const rewardsConfig = await connection.connection.collection('configs').findOne({ name: 'rewards' });
     if (!rewardsConfig?.enabled) {
         console.log('Rewards are disabled');
-        return;
+       // return;
     }
     const globalMulitplier = rewardsConfig ? rewardsConfig.multiplier : 1;
     console.log(globalMulitplier);
 
     const allDevices = await DeviceModel.find({ is_registered: true }) as Device[];
-    const filtered = allDevices.filter((device) => device.reward_wallet);
-
-    console.log(await client.status().do());
+    //const filtered = allDevices.filter((device) => device.reward_wallet)
+    const filtered = allDevices.filter((device) => device.miner_key.split('-')[0] == "CN");
+    console.log(filtered);
+    //console.log(await client.status().do());
     const account = mnemonicToSecretKey(process.env.MNEMONIC!);
     //send the same amount to each address of FrysCrypto (FRY) which has a contract number: 924268058
     const enc = new TextEncoder();
@@ -67,8 +67,13 @@ const main = async () => {
                 console.log(`Product not found for miner ${device.miner_key}`);
                 continue;
             }
+            
             let amount;
-            const address = device.reward_wallet!;
+            const address = device.reward_wallet;
+            if(!address) {
+                console.log(`No reward wallet for miner ${device.miner_key}`);
+                continue;
+            }
             if (product.type === "hardware") {
 
 
@@ -81,15 +86,29 @@ const main = async () => {
 
                 const lastTransactionsInLast24Hours: Array<any> = lastTransactions.transactions.filter((transaction: Transaction) => {
                     const transactionDate = new Date(transaction['round-time'] * 1000);
+                    if(transactionDate < oneDayAgo) return false;
                     const isTheSender = transaction.sender === address;
+                    if(!isTheSender) return false;
                     const isAmountZero = !transaction['asset-transfer-transaction'] || transaction['asset-transfer-transaction'].amount === 0;
+                    if(!isAmountZero) return false;
                     const isFRY = transaction['asset-transfer-transaction'] && transaction['asset-transfer-transaction']['asset-id'] === config.asset_index;
+                    if(!isFRY) return false;
                     const note = transaction.note;
-                    const decrypted = decryptWithPrivateKey(privateKeyPem, note);
+                    const decodeBase64 = Buffer.from(note, 'base64').toString('utf-8');
+                    console.log(decodeBase64);
+                    try {
+                    const decrypted = decryptWithPrivateKey(privateKeyPem, decodeBase64);
+                    console.log(decrypted);
                     const isSameDevice = decrypted == device.miner_key
-                    return (transactionDate > oneDayAgo && isTheSender && isAmountZero && isFRY && isSameDevice);
+                    return (isSameDevice);
+                    } catch (e) {
+                        console.log(e);
+                        return false;
+                    }
+                    
+                    
                 });
-
+     
                 //if there is at least 24 transactions in the last 24 hours, with 0 amount, then send the FRY
 
                 let mult = 1;
@@ -107,7 +126,7 @@ const main = async () => {
                 console.log(`amount for ${device.miner_key} is ${amount * globalMulitplier}`)
             }
             //Calculate the total amount of FRY to send
-            const amountToSend = (amount) * globalMulitplier;
+            const amountToSend = (amount) * globalMulitplier * 1_000_000;
 
 
 
@@ -193,7 +212,7 @@ interface Transaction {
     signature: Object;
     'tx-type': string;
 }
-
+/*
 interface Device {
     _id: string;
     user_id: string;
@@ -219,3 +238,4 @@ interface Device {
     email: string;
     __v: number;
 }
+*/

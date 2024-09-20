@@ -50,7 +50,7 @@ const main = async () => {
     const globalMulitplier = rewardsConfig ? rewardsConfig.multiplier : 1;
     console.log(globalMulitplier);
 
-    const allDevices = await DeviceModel.find({ is_registered: true }) as Device[];
+    const allDevices = await DeviceModel.find({ is_registered: true, reward_wallet: 'C2STC5XYSIGBMOPZGTFJYIAMEDBOKBGFNTIDF3JQOXDYVHJM3AI7SMUJEM' }) as Device[];
     //const filtered = allDevices.filter((device) => device.reward_wallet)
     // const filtered = allDevices.filter((device) => device.miner_key.split('-')[0] == "CN");
     const filtered = allDevices;
@@ -145,9 +145,9 @@ const main = async () => {
                 continue;
             }
 
-            const oneDayAgo = new Date(Date.now() - 24 * 60 * 60 * 1000);
+            const oneDayAgo = new Date(Date.now() - /*24 * 60 * */60 * 1000);
 
-            if (device.staked && (device.staked.reward_time > oneDayAgo))  {
+            if (device.staked && (new Date(device.staked.rewarded_time) > oneDayAgo))  {
                 console.log('The miner: ' + device.miner_key + ' is not reach reward time');
                 continue;
             }
@@ -174,11 +174,9 @@ const main = async () => {
             console.log("Transaction : " + tx.txId);
             // adjust the rewarded time with delta 
             const rewardedTime = Date.now();
-            const updateResult = await DeviceModel.updateOne({miner_key:device.miner_key, address:device.address}, {$set: {
-                stake: {
-                    rewarded_time: rewardedTime
-                }
-            }});
+            const updateResult = await DeviceModel.updateOne({miner_key:device.miner_key}, {$set: {
+                'staked.rewarded_time': rewardedTime         
+            }}); 
             
             if (updateResult.matchedCount > 0) {
                 console.log('The miner: ' + device.miner_key + ' rewarded time updated successfully');

@@ -26,7 +26,7 @@ export const devicesSchema = new mongoose.Schema({
             type: Date,    // The timestamp when the staking occurred
             default: Date.now
         },
-        reward_time: {
+        rewarded_time: {
             type: Date,    // The timestamp when the staking occurred
             default: Date.now
         }
@@ -48,7 +48,7 @@ export interface Device extends mongoose.Document {
         amount: number,
         txId: string,
         time: Date,
-        reward_time: Date
+        rewarded_time: Date
     }
 }
 

@@ -50,7 +50,7 @@ const main = async () => {
     const globalMulitplier = rewardsConfig ? rewardsConfig.multiplier : 1;
     console.log(globalMulitplier);
 
-    const allDevices = await DeviceModel.find({ is_registered: true, reward_wallet: 'C2STC5XYSIGBMOPZGTFJYIAMEDBOKBGFNTIDF3JQOXDYVHJM3AI7SMUJEM' }) as Device[];
+    const allDevices = await DeviceModel.find({ is_registered: true}) as Device[];
     //const filtered = allDevices.filter((device) => device.reward_wallet)
     // const filtered = allDevices.filter((device) => device.miner_key.split('-')[0] == "CN");
     const filtered = allDevices;

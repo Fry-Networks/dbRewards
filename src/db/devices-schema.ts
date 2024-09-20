@@ -1,6 +1,6 @@
 import mongoose, { mongo } from 'mongoose';
 export const devicesSchema = new mongoose.Schema({
-	user_id: mongoose.Schema.Types.ObjectId,
+    user_id: mongoose.Schema.Types.ObjectId,
     miner_key: String, 
     name: String,
     created_at: { type: Date, default: Date.now },
@@ -9,10 +9,32 @@ export const devicesSchema = new mongoose.Schema({
     reward_wallet: String,
     address: String,
     byod: { type: String, default: "" },
- 
+    staked: {
+        type: {
+            type: String,  // The type field for staked 
+            required: true
+        },
+        amount: {
+            type: Number,  // The amount of staked tokens
+            required: true
+        },
+        txId: {
+            type: String,  // The transaction ID of the staking operation
+            required: true
+        },
+        time: {
+            type: Date,    // The timestamp when the staking occurred
+            default: Date.now
+        },
+        rewarded_time: {
+            type: Date,    // The timestamp when the staking occurred
+            default: Date.now
+        }
+    }
 });
+
 export interface Device extends mongoose.Document {
-	user_id: mongoose.Schema.Types.ObjectId | string,
+    user_id: mongoose.Schema.Types.ObjectId | string,
     miner_key: string,
     name: string,
     address: string,
@@ -20,7 +42,15 @@ export interface Device extends mongoose.Document {
     is_registered: boolean,
     verified: boolean,
     reward_wallet: string,
-    byod?: string
+    byod?: string,
+    staked?: {
+        type: string,
+        amount: number,
+        txId: string,
+        time: Date,
+        rewarded_time: Date
+    }
 }
+
 
 export const DeviceModel = mongoose.model<Device>('devices', devicesSchema);

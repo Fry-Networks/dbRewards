@@ -145,7 +145,7 @@ const main = async () => {
                 continue;
             }
 
-            const oneDayAgo = new Date(Date.now() - /*24 * 60 * */60 * 1000);
+            const oneDayAgo = new Date(Date.now() - 24 * 60 * 60 * 1000);
 
             if (device.staked && (new Date(device.staked.rewarded_time) > oneDayAgo))  {
                 console.log('The miner: ' + device.miner_key + ' is not reach reward time');
@@ -194,7 +194,7 @@ const main = async () => {
 
 main()
 
-setInterval(main, 24 * 60 * 60 * 1000);
+setInterval(main, 10 * 60 * 1000);
 
 async function hasOptedInForAsset(address: string, assetId: number): Promise<boolean> {
     const accountInfo = await client.accountInformation(address).do();

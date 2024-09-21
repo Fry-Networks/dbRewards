@@ -38,6 +38,28 @@ function decryptWithPrivateKey(privateKeyPem: string, encryptedData: string): st
     return decrypted;
 }
 
+const isStakeValid = (product: any): boolean => {
+    if (!product.reward.stake) {
+      // stake is undefined or null, return false if it must be present
+      return false;
+    }
+  
+    const { stake_one, stake_two } = product.reward.stake;
+  
+    // Check if both stake_one and stake_two are defined and are numbers
+    if (typeof stake_one !== 'number' || typeof stake_two !== 'number') {
+      return false;
+    }
+  
+    // Optionally: Check for more specific validation rules (e.g., stake values must be positive)
+    if (stake_one < 0 || stake_two < 0) {
+      return false; // Example rule: stakes cannot be negative
+    }
+  
+    // All checks passed, return true
+    return true;
+  };
+
 
 const main = async () => {
     await connect();
@@ -124,6 +146,16 @@ const main = async () => {
             //     amount = Math.floor(device.byod ? Math.round(reward * mult * 100) / 200 : Math.round(reward * mult * 100) / 100) //byod devices get half the reward
             //     console.log(`amount for ${device.miner_key} is ${amount * globalMulitplier} -- ${lastTransactionsInLast24Hours.length} transactions in the last 24 hours}`)
             // } else 
+            if (isStakeValid(product) === false) {
+                console.log('The miner: ' + device.miner_key + 'is not allowed to stake');
+                continue;
+            }
+
+            if (product.reward.stake?.stake_one !== device.staked?.amount && product.reward.stake?.stake_two !== device.staked?.amount) {
+                console.log('The miner: ' + device.miner_key + 'is staked invalid amount');
+                continue;
+            }
+            
             if (device.verified)
             {
                 amount = product?.reward.verified ?? 0

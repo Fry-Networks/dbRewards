@@ -159,18 +159,18 @@ const main = async () => {
             if (device.verified)
             {
                 amount = product?.reward.verified ?? 0
-                amount *= device.staked?.type === "one" ? 1.5 : 3; //Multiple reward amount following FIP-0007
-                console.log(`amount for ${device.miner_key} is ${amount * globalMulitplier}`)
+                amount = Math.round(amount * 100 * (device.staked?.type === "one" ? 1.5 : 3)) / 100; //Multiple reward amount following FIP-0007
+                console.log(`amount for ${device.miner_key} is ${Math.round(amount * globalMulitplier * 100) / 100}`)
             } else {
                 amount = (product?.reward.unverified) ?? 0;
-                console.log(`amount for ${device.miner_key} is ${amount * globalMulitplier}`)
+                console.log(`amount for ${device.miner_key} is ${Math.round(amount * globalMulitplier * 100) / 100}`)
             }
 
             if (device.byod) { //if byod then reward must be in half
                 amount = Math.round(amount *  100) / 200;
             }
             //Calculate the total amount of FRY to send
-            const amountToSend = (amount) * globalMulitplier * 1_000_000;
+            const amountToSend = Math.round((amount) * globalMulitplier * 100) / 100 * 1_000_000;
 
             if (amount <= 0) {
                 console.log('The miner: ' + device.miner_key + ' has no transactions in the last 24 hours');

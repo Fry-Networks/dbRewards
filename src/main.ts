@@ -146,6 +146,11 @@ const main = async () => {
             //     amount = Math.floor(device.byod ? Math.round(reward * mult * 100) / 200 : Math.round(reward * mult * 100) / 100) //byod devices get half the reward
             //     console.log(`amount for ${device.miner_key} is ${amount * globalMulitplier} -- ${lastTransactionsInLast24Hours.length} transactions in the last 24 hours}`)
             // } else 
+            if (device.is_registered === false) {
+                console.log('The miner: ' + device.miner_key + 'is not registered');
+                continue;
+            }
+
             if (device.verified && isStakeValid(product) === false) {
                 console.log('The miner: ' + device.miner_key + 'is not allowed to stake');
                 continue;

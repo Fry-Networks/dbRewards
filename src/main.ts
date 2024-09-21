@@ -146,16 +146,16 @@ const main = async () => {
             //     amount = Math.floor(device.byod ? Math.round(reward * mult * 100) / 200 : Math.round(reward * mult * 100) / 100) //byod devices get half the reward
             //     console.log(`amount for ${device.miner_key} is ${amount * globalMulitplier} -- ${lastTransactionsInLast24Hours.length} transactions in the last 24 hours}`)
             // } else 
-            if (isStakeValid(product) === false) {
+            if (device.verified && isStakeValid(product) === false) {
                 console.log('The miner: ' + device.miner_key + 'is not allowed to stake');
                 continue;
             }
 
-            if (product.reward.stake?.stake_one !== device.staked?.amount && product.reward.stake?.stake_two !== device.staked?.amount) {
+            if (device.verified && (product.reward.stake?.stake_one !== device.staked?.amount && product.reward.stake?.stake_two !== device.staked?.amount)) {
                 console.log('The miner: ' + device.miner_key + 'is staked invalid amount');
                 continue;
             }
-            
+
             if (device.verified)
             {
                 amount = product?.reward.verified ?? 0

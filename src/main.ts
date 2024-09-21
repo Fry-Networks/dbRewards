@@ -45,7 +45,7 @@ const main = async () => {
     const rewardsConfig = await connection.connection.collection('configs').findOne({ name: 'rewards' });
     if (!rewardsConfig?.enabled) {
         console.log('Rewards are disabled');
-       // return;
+       return;
     }
     const globalMulitplier = rewardsConfig ? rewardsConfig.multiplier : 1;
     console.log(globalMulitplier);

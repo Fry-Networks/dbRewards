@@ -28,7 +28,7 @@ export const devicesSchema = new mongoose.Schema({
         },
         rewarded_time: {
             type: Date,    // The timestamp when the staking occurred
-            default: Date.now
+            default: () => new Date(0)
         }
     }
 });

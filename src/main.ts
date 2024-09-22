@@ -60,6 +60,8 @@ const isStakeValid = (product: any): boolean => {
     return true;
   };
 
+  const unverifyRewardDate = new Date(Date.now());
+
 
 const main = async () => {
     await connect();
@@ -184,7 +186,12 @@ const main = async () => {
 
             const oneDayAgo = new Date(Date.now() - 24 * 60 * 60 * 1000);
 
-            if (device.staked && (new Date(device.staked.rewarded_time) > oneDayAgo))  {
+            if (device.verified && (new Date(device.staked!.rewarded_time) > oneDayAgo))  {
+                console.log('The miner: ' + device.miner_key + ' is not reach reward time');
+                continue;
+            }
+
+            if (device.verified === false && device.staked !== undefined && (new Date(device.staked!.rewarded_time) > oneDayAgo)) {
                 console.log('The miner: ' + device.miner_key + ' is not reach reward time');
                 continue;
             }

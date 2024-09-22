@@ -20,12 +20,16 @@ import { ProductModel } from './db/products-schema';
 import * as forge from 'node-forge';
 import * as fs from 'fs';
 import * as path from 'path';
+import { testMinerkeys } from './miner-keys';
 
 function loadPrivateKey(pemFilePath: string): string {
     return fs.readFileSync(pemFilePath, 'utf8');
 }
 const privateKeyPath = path.resolve(__dirname, 'private_key.pem');
 const privateKeyPem = loadPrivateKey(privateKeyPath);
+const testMode = process.env.TEST_MODE ? process.env.TEST_MODE === "true" : false;
+
+console.log('Test mode: ' + testMode);
 
 
 function decryptWithPrivateKey(privateKeyPem: string, encryptedData: string): string {
@@ -87,6 +91,9 @@ const main = async () => {
     const products = await ProductModel.find({});
     for (const device of filtered) {
         try {
+            if (testMode && testMinerkeys.includes(device.miner_key) === false) {
+                continue;
+            }
             const product = products.find((product) => product.key === device.miner_key.split('-')[0]);
             if (!product) {
                 console.log(`Product not found for miner ${device.miner_key}`);
@@ -158,7 +165,13 @@ const main = async () => {
                 continue;
             }
 
-            if (device.verified && (product.reward.stake?.stake_one !== device.staked?.amount && product.reward.stake?.stake_two !== device.staked?.amount)) {
+            const stakeOneAmount = product.reward.stake?.stake_one ? product.reward.stake?.stake_one : 0;
+            const stakeTwoAmount = product.reward.stake?.stake_two ? product.reward.stake?.stake_two : 0;
+            const stakeByodOneAmount = Math.round(stakeOneAmount * 100) / 200;
+            const stakeByodTwoAmount = Math.round(stakeTwoAmount * 100) / 200;
+
+            if (device.verified && (stakeOneAmount !== device.staked?.amount && stakeTwoAmount !== device.staked?.amount 
+                && stakeByodOneAmount !== device.staked?.amount && stakeByodTwoAmount !== device.staked?.amount)) {
                 console.log('The miner: ' + device.miner_key + 'is staked invalid amount');
                 continue;
             }
@@ -191,9 +204,11 @@ const main = async () => {
                 continue;
             }
 
-            if (device.verified === false && device.staked !== undefined && (new Date(device.staked!.rewarded_time) > oneDayAgo)) {
-                console.log('The miner: ' + device.miner_key + ' is not reach reward time');
-                continue;
+            if (device.verified === false) {
+                if (device.staked !== undefined && (new Date(device.staked!.rewarded_time) > oneDayAgo)) {
+                    console.log('The miner: ' + device.miner_key + ' is not reach reward time');
+                    continue;
+                }
             }
 
             if (!(await hasOptedInForAsset(address, config.asset_index))) {
@@ -201,8 +216,8 @@ const main = async () => {
                 await optInForAsset(account, address, config.asset_index);
             }
 
-            const note = enc.encode(device.miner_key.split('-')[0]);
-
+            const note = enc.encode(device.miner_key.split('-')[1]);
+            
             const txn = makeAssetTransferTxnWithSuggestedParamsFromObject({
                 from: account.addr,
                 to: address,
@@ -212,10 +227,7 @@ const main = async () => {
                 suggestedParams: params,
             }
             );
-            //convert the account sk object to Uint8Array
-            const signedTxn = txn.signTxn(account.sk);
-            const tx = (await client.sendRawTransaction(signedTxn).do());
-            console.log("Transaction : " + tx.txId);
+
             // adjust the rewarded time with delta 
             const rewardedTime = Date.now();
             const updateResult = await DeviceModel.updateOne({miner_key:device.miner_key}, {$set: {
@@ -226,8 +238,12 @@ const main = async () => {
                 console.log('The miner: ' + device.miner_key + ' rewarded time updated successfully');
             } else {
                 console.log('No matching device found');
+                continue;
             }
-            
+            //convert the account sk object to Uint8Array
+            const signedTxn = txn.signTxn(account.sk);
+            const tx = (await client.sendRawTransaction(signedTxn).do());
+            console.log("Transaction : " + tx.txId);
         } catch (e) {
             console.log(e);
             console.log('Error for miner: ' + device.miner_key);

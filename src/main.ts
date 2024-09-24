@@ -217,7 +217,7 @@ const main = async () => {
             }
 
             // const note = enc.encode(device.miner_key.split('-')[1]);
-            const note = enc.encode(device.byod ? 'BYOD - ' : '' + device.miner_key.split('-')[0] + '-' + device.miner_key.split('-')[1].slice(0, 6));
+            const note = enc.encode((device.byod ? 'BYOD - ' : '') + device.miner_key.split('-')[0] + '-' + device.miner_key.split('-')[1].slice(0, 6));
             
             const txn = makeAssetTransferTxnWithSuggestedParamsFromObject({
                 from: account.addr,

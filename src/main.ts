@@ -75,6 +75,7 @@ const main = async () => {
         console.log('Rewards are disabled');
        return;
     }
+    
     const globalMulitplier = rewardsConfig ? rewardsConfig.multiplier : 1;
     console.log(globalMulitplier);
 
@@ -85,12 +86,18 @@ const main = async () => {
     console.log(filtered);
     //console.log(await client.status().do());
     const account = mnemonicToSecretKey(process.env.MNEMONIC!);
+    const algoBalance = await getAlgoBalance(account.addr);
+    // console.log('Algo in rewarding wallet: ' + algoBalance);
+    if (!algoBalance || algoBalance <= 1) {
+        console.log('No algo or not enough algo is in rewarding wallet');
+        return;
+    }
     //send the same amount to each address of FrysCrypto (FRY) which has a contract number: 924268058
     const enc = new TextEncoder();
-    const params = await client.getTransactionParams().do();
     const products = await ProductModel.find({});
     for (const device of filtered) {
         try {
+            const params = await client.getTransactionParams().do();
             if (testMode && testMinerkeys.includes(device.miner_key) === false) {
                 continue;
             }
@@ -105,6 +112,12 @@ const main = async () => {
             if(!address) {
                 console.log(`No reward wallet for miner ${device.miner_key}`);
                 continue;
+            }
+
+            const algoBalance = await getAlgoBalance(account.addr);
+            if (!algoBalance || algoBalance <= 1) {
+                console.log('No algo or not enough algo is in rewarding wallet');
+                return;
             }
 
             // if (product.type === "hardware") {
@@ -230,7 +243,7 @@ const main = async () => {
             );
 
             // adjust the rewarded time with delta 
-            const rewardedTime = Date.now();
+            const rewardedTime = new Date(device.staked?.rewarded_time ? device.staked.rewarded_time.getTime() + 24 * 60 * 60 * 1000 : Date.now());
             const updateResult = await DeviceModel.updateOne({miner_key:device.miner_key}, {$set: {
                 'staked.rewarded_time': rewardedTime         
             }}); 
@@ -252,6 +265,23 @@ const main = async () => {
         }
     }
 };
+
+async function getAlgoBalance(address: string) {
+    try {
+        // Fetch account information
+        const accountInfo = await client.accountInformation(address).do();
+        
+        // Extract balance (in microAlgos, so divide by 1e6 to get Algo)
+        const balanceInMicroAlgos = accountInfo.amount;
+        const balanceInAlgos = balanceInMicroAlgos / 1e6;
+
+        // console.log(`Algo balance for ${address}: ${balanceInAlgos} Algos`);
+        return balanceInAlgos;
+    } catch (error) {
+        console.error('Failed to fetch account balance:', error);
+        return null;
+    }
+}
 
 main()
 

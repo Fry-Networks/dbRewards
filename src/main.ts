@@ -96,9 +96,10 @@ const main = async () => {
     const enc = new TextEncoder();
     const products = await ProductModel.find({});
     let count = 0;
+    let params:any;
     for (const device of filtered) {
         try {
-            let params:any;
+            
             if (count === 0) {
                 params = await client.getTransactionParams().do();
             }

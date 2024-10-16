@@ -98,8 +98,9 @@ const main = async () => {
     let count = 0;
     for (const device of filtered) {
         try {
+            let params:any;
             if (count === 0) {
-                const params = await client.getTransactionParams().do();
+                params = await client.getTransactionParams().do();
             }
 
             count = (count + 1) % 1000;

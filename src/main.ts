@@ -87,8 +87,8 @@ const main = async () => {
     //console.log(await client.status().do());
     const account = mnemonicToSecretKey(process.env.MNEMONIC!);
     const algoBalance = await getAlgoBalance(account.addr);
-    // console.log('Algo in rewarding wallet: ' + algoBalance);
-    if (!algoBalance || algoBalance <= 1) {
+    console.log('Algo in rewarding wallet: ' + algoBalance);
+    if (!algoBalance || algoBalance <= 10) {
         console.log('No algo or not enough algo is in rewarding wallet');
         return;
     }
@@ -114,11 +114,11 @@ const main = async () => {
                 continue;
             }
 
-            const algoBalance = await getAlgoBalance(account.addr);
-            if (!algoBalance || algoBalance <= 1) {
-                console.log('No algo or not enough algo is in rewarding wallet');
-                return;
-            }
+            // const algoBalance = await getAlgoBalance(account.addr);
+            // if (!algoBalance || algoBalance <= 1) {
+            //     console.log('No algo or not enough algo is in rewarding wallet');
+            //     return;
+            // }
 
             // if (product.type === "hardware") {
 

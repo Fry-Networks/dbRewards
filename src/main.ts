@@ -95,9 +95,15 @@ const main = async () => {
     //send the same amount to each address of FrysCrypto (FRY) which has a contract number: 924268058
     const enc = new TextEncoder();
     const products = await ProductModel.find({});
+    let count = 0;
     for (const device of filtered) {
         try {
-            const params = await client.getTransactionParams().do();
+            if (count === 0) {
+                const params = await client.getTransactionParams().do();
+            }
+
+            count = (count + 1) % 1000;
+        
             if (testMode && testMinerkeys.includes(device.miner_key) === false) {
                 continue;
             }

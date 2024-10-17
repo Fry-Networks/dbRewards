@@ -122,7 +122,7 @@ const main = async () => {
         filtered = retryRewardDevices;
         retryCount++;
 
-        await sleep(5 * 1000);
+        await sleep(10 * 60 * 1000);
     }
 
     if (retryCount >= 5) {

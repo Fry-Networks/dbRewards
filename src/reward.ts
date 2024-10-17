@@ -39,7 +39,7 @@ enum RUNNING_STEP {
     END,
 }
 
-const DEBUG = true;
+const DEBUG = !process.env.DEBUG && process.env.DEBUG === "true";
 const enc = new TextEncoder();
 
 function getDaysConsideringTime(startDate: Date, endDate: Date): number {

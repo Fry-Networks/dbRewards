@@ -39,7 +39,7 @@ enum RUNNING_STEP {
     END,
 }
 
-const DEBUG = false;
+const DEBUG = true;
 const enc = new TextEncoder();
 
 function getDaysConsideringTime(startDate: Date, endDate: Date): number {
@@ -97,15 +97,16 @@ export const doRewards = async (devices: Device[], products: Product[], mainAcco
 
             let rewardAmount = 0;
             let err: string = '';
+            DEBUG && console.log(`BYOD for device ${device.miner_key}: ${device.byod}`);
             if (device.staked === undefined) {
                 rewardAmount = product.reward.verified;
             } else {
                 if (device.verified) {
-                    const stakedAmount = device.staked.amount * (device.byod !== undefined ? 2 : 1);
+                    const stakedAmount = device.staked.amount * ((device.byod !== undefined && device.byod.length > 0) ? 2 : 1);
                     
                     switch (device.staked.type) {
                         case 'one': {
-                            if (device.staked.amount === product.reward.stake?.stake_one) {
+                            if (stakedAmount === product.reward.stake?.stake_one) {
                                 rewardAmount = Math.round(product.reward.verified * 100 * 1.5) / 100;
                             } else {
                                 err = 'staked invalid amount';
@@ -113,7 +114,7 @@ export const doRewards = async (devices: Device[], products: Product[], mainAcco
                         }
                         break;
                         case 'two': {
-                            if (device.staked.amount === product.reward.stake?.stake_two) {
+                            if (stakedAmount === product.reward.stake?.stake_two) {
                                 rewardAmount = Math.round(product.reward.verified * 100 * 3.0) / 100;
                             } else {
                                 err = 'staked invalid amount';
@@ -132,6 +133,8 @@ export const doRewards = async (devices: Device[], products: Product[], mainAcco
             if (device.byod !== undefined) {
                 rewardAmount = Math.round(rewardAmount / 2 * 100) / 100;
             }
+            DEBUG && console.log(`Reward for device ${device.miner_key}: ${rewardAmount} $FRY`);
+
 
             runningStep = RUNNING_STEP.GET_REWARD_AMOUNT;
             if (rewardAmount <= 0) {
@@ -179,7 +182,7 @@ export const doRewards = async (devices: Device[], products: Product[], mainAcco
             runningStep = RUNNING_STEP.DATA_UPDATED;
 
             const partOfMinerKey = device.miner_key.split('-')[1].slice(0, 6);
-            const noteBasic = (device.byod !== undefined ? 'BYOD-' : '') + minerType + '-' + partOfMinerKey + '-' + rewardForDays + 'days';
+            const noteBasic = ((device.byod !== undefined && device.byod.length > 0) ? 'BYOD-' : '') + minerType + '-' + partOfMinerKey + '-' + rewardForDays + 'days';
             DEBUG && console.log(`Note for device ${device.miner_key} is ${noteBasic}`);
             if (!(await hasOptedInForAsset(minerRewardAddr, config.asset_index))) {
                 DEBUG && console.log(`Reward wallet ${minerRewardAddr} for device ${device.miner_key} is not opted in $FRY`);

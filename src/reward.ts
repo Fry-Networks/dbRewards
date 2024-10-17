@@ -62,8 +62,11 @@ export const doRewards = async (devices: Device[], products: Product[], mainAcco
     let     refreshParamCount = 0;
     const   currentDate = new Date(Date.now());
     // let     countForFaile = 0;
+    let     processedCount = 0;
 
     for (const device of devices) {
+        console.log(processedCount);
+        processedCount++;
         let runningStep = RUNNING_STEP.START;
         try {
             //Refresh Alogrand chain params every 1K devices for refreshing block
@@ -149,7 +152,11 @@ export const doRewards = async (devices: Device[], products: Product[], mainAcco
 
             }
             if (rewardForDays > 1) {
-                console.log(`Missing days for device ${device.miner_key}: ${rewardForDays} days`);
+                DEBUG && console.log(`Missing days for device ${device.miner_key}: ${rewardForDays} days`);
+            } else if (rewardForDays <= 0) {
+                DEBUG && console.log(`Already got rewarded`);
+                errDevices.push({device: device, err: 'Already rewarded'});
+                continue;
             }
 
             rewardAmount = rewardAmount * rewardForDays;
@@ -172,7 +179,7 @@ export const doRewards = async (devices: Device[], products: Product[], mainAcco
             runningStep = RUNNING_STEP.DATA_UPDATED;
 
             const partOfMinerKey = device.miner_key.split('-')[1].slice(0, 6);
-            const noteBasic = (device.byod !== undefined ? 'BYOD-' : '') + minerType + '-' + partOfMinerKey;
+            const noteBasic = (device.byod !== undefined ? 'BYOD-' : '') + minerType + '-' + partOfMinerKey + '-' + rewardForDays + 'days';
             DEBUG && console.log(`Note for device ${device.miner_key} is ${noteBasic}`);
             if (!(await hasOptedInForAsset(minerRewardAddr, config.asset_index))) {
                 DEBUG && console.log(`Reward wallet ${minerRewardAddr} for device ${device.miner_key} is not opted in $FRY`);
@@ -205,12 +212,31 @@ export const doRewards = async (devices: Device[], products: Product[], mainAcco
     return errDevices;
 }
 
+function generateRandomNumberString(length: number, options?: { includeLeadingZeroes?: boolean }): string {
+    const digits = [];
+    const includeLeadingZeroes = options?.includeLeadingZeroes || false;
+
+    for (let i = 0; i < length; i++) {
+        if (i === 0 && !includeLeadingZeroes) {
+            // Ensure the first digit is not zero if leading zeroes are not allowed
+            digits.push(Math.floor(Math.random() * 9) + 1);
+        } else {
+            // For the rest of the digits, generate a number between 0 and 9
+            digits.push(Math.floor(Math.random() * 10));
+        }
+    }
+
+    return digits.join('-Optin');
+}
+
 async function hasOptedInForAsset(address: string, assetId: number): Promise<boolean> {
     const accountInfo = await client.accountInformation(address).do();
     const assets = accountInfo['assets'] || [];
     return assets.some((asset: any) => asset['asset-id'] === assetId);
 }
 async function optInForAsset(fromAccount: Account, toAddress: string, assetId: number): Promise<void> {
+    const enc = new TextEncoder();
+    const note = enc.encode(generateRandomNumberString(10));
     const params = await client.getTransactionParams().do();
     const optInTxn = makeAssetTransferTxnWithSuggestedParamsFromObject({
         from: fromAccount.addr,
@@ -218,6 +244,7 @@ async function optInForAsset(fromAccount: Account, toAddress: string, assetId: n
         amount: 0,
         assetIndex: assetId,
         suggestedParams: params,
+        note: note
     });
     const signedOptInTxn = optInTxn.signTxn(fromAccount.sk);
     await client.sendRawTransaction(signedOptInTxn).do();

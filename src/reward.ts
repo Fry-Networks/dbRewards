@@ -130,7 +130,7 @@ export const doRewards = async (devices: Device[], products: Product[], mainAcco
                 }
             }
 
-            if (device.byod !== undefined) {
+            if (device.byod !== undefined && device.byod.length > 0) {
                 rewardAmount = Math.round(rewardAmount / 2 * 100) / 100;
             }
             DEBUG && console.log(`Reward for device ${device.miner_key}: ${rewardAmount} $FRY`);

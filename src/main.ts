@@ -14,7 +14,7 @@ const indexer = new Indexer(tokenToSend, indexServer, port);
 
 import config from '../config.json'
 import { connect, getConnection } from './db/connect';
-import { Device, DeviceModel } from './db/devices-schema';
+import { Device, DeviceModel, TestDeviceModel } from './db/devices-schema';
 import 'dotenv/config';
 import { ProductModel } from './db/products-schema';
 import * as forge from 'node-forge';
@@ -73,7 +73,7 @@ const main = async () => {
     const connection = getConnection();
     
     const rewardsConfig = await connection.connection.collection('configs').findOne({ name: 'rewards' });
-    if (!rewardsConfig?.enabled) {
+    if (!testMode && !rewardsConfig?.enabled) {
         console.log('Rewards are disabled');
        return;
     }
@@ -81,7 +81,7 @@ const main = async () => {
     const globalMulitplier = rewardsConfig ? rewardsConfig.multiplier : 1;
     console.log(globalMulitplier);
 
-    const allDevices = await DeviceModel.find({ is_registered: true}) as Device[];
+    const allDevices = testMode ? await TestDeviceModel.find({ is_registered: true}) as Device[] : await DeviceModel.find({ is_registered: true}) as Device[];
     //const filtered = allDevices.filter((device) => device.reward_wallet)
     // const filtered = allDevices.filter((device) => device.miner_key.split('-')[0] == "CN");
     let filtered = allDevices;
@@ -154,4 +154,4 @@ function sleep(ms: number): Promise<void> {
 }
 
 main()
-setInterval(main, 24 * 60 * 60 * 1000);
+setInterval(main, (testMode ? 4 : 24) * 60 * 60 * 1000);

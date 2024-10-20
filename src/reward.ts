@@ -163,7 +163,7 @@ export const doRewards = async (devices: Device[], products: Product[], mainAcco
                 continue;
             }
 
-            rewardAmount = Math.round(rewardAmount * rewardForDays * 100) / 100;
+            rewardAmount = Math.round(rewardAmount * 100 * rewardForDays) / 100;
             runningStep = RUNNING_STEP.APPLY_MISSING_REWARD;
             
             const amountToSend = testMode ? 0 : rewardAmount * 1_000_000;

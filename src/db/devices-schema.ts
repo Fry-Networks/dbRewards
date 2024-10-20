@@ -24,11 +24,9 @@ export const devicesSchema = new mongoose.Schema({
         },
         time: {
             type: Date,    // The timestamp when the staking occurred
-            default: Date.now
         },
         rewarded_time: {
             type: Date,    // The timestamp when the staking occurred
-            default: () => new Date(0)
         }
     }
 });
@@ -54,3 +52,4 @@ export interface Device extends mongoose.Document {
 
 
 export const DeviceModel = mongoose.model<Device>('devices', devicesSchema);
+export const TestDeviceModel = mongoose.model<Device>('test-devices', devicesSchema);

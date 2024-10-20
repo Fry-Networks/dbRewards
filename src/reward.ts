@@ -14,7 +14,7 @@ const indexer = new Indexer(tokenToSend, indexServer, port);
 
 import config from '../config.json'
 import { connect, getConnection } from './db/connect';
-import { Device, DeviceModel } from './db/devices-schema';
+import { Device, DeviceModel, TestDeviceModel } from './db/devices-schema';
 import 'dotenv/config';
 import { Product, ProductModel } from './db/products-schema';
 import * as forge from 'node-forge';
@@ -27,7 +27,7 @@ interface ReturnDevice {
     err: string;
 }
 
-const testMode = !process.env.TEST_MODE && process.env.TEST_MODE === "true";
+const testMode = process.env.TEST_MODE && process.env.TEST_MODE === "true";
 enum RUNNING_STEP {
     START = 0,
     GET_CHAIN_PARAM = 1,
@@ -39,7 +39,7 @@ enum RUNNING_STEP {
     END,
 }
 
-const DEBUG = !process.env.DEBUG && process.env.DEBUG === "true";
+const DEBUG = process.env.DEBUG && process.env.DEBUG === "true";
 const enc = new TextEncoder();
 
 function getDaysConsideringTime(startDate: Date, endDate: Date): number {
@@ -74,11 +74,7 @@ export const doRewards = async (devices: Device[], products: Product[], mainAcco
                 chainParams = await client.getTransactionParams().do();
             }
             refreshParamCount = (refreshParamCount + 1) % 1000;
-            runningStep = RUNNING_STEP.GET_CHAIN_PARAM
-
-            if (testMode && testMinerkeys.includes(device.miner_key) === false) {
-                continue;
-            }
+            runningStep = RUNNING_STEP.GET_CHAIN_PARAM;
 
             const minerType = device.miner_key.split('-')[0];
             const product = products.find((product) => product.key === minerType);
@@ -98,6 +94,9 @@ export const doRewards = async (devices: Device[], products: Product[], mainAcco
             let rewardAmount = 0;
             let err: string = '';
             DEBUG && console.log(`BYOD for device ${device.miner_key}: ${device.byod}`);
+            DEBUG && console.log(`Staked: ${device.staked}`);
+            DEBUG && console.log(`Reward time: ${device.staked?.rewarded_time}`)
+            
             if (device.staked === undefined) {
                 rewardAmount = product.reward.verified;
             } else {
@@ -144,18 +143,20 @@ export const doRewards = async (devices: Device[], products: Product[], mainAcco
             }
 
             let rewardForDays = 1;
-            if (device.staked?.rewarded_time) {
+            DEBUG && console.log('Last rewarded time for device ' + device.miner_key + ' : ' + new Date(device.staked!.rewarded_time));
+            if (device.staked?.rewarded_time !== undefined && device.staked?.rewarded_time.getFullYear() >= 2024) {
                 if (new Date(device.staked.rewarded_time) > currentDate) {
                     DEBUG && console.log(`Rewarded Time is invalid for device ${device.miner_key}`);
                     errDevices.push({device: device, err: 'Invalid reward time'});
                     continue;
                 }
                 
-                rewardForDays = getDaysConsideringTime(new Date(device.staked.rewarded_time), currentDate);
-
+                rewardForDays = testMode ? getThreeHourIntervals(new Date(device.staked.rewarded_time), currentDate) : getDaysConsideringTime(new Date(device.staked.rewarded_time), currentDate);
             }
-            if (rewardForDays > 1) {
+
+            if (rewardForDays > 5) {
                 DEBUG && console.log(`Missing days for device ${device.miner_key}: ${rewardForDays} days`);
+                rewardForDays = 1;
             } else if (rewardForDays <= 0) {
                 DEBUG && console.log(`Already got rewarded`);
                 errDevices.push({device: device, err: 'Already rewarded'});
@@ -164,15 +165,14 @@ export const doRewards = async (devices: Device[], products: Product[], mainAcco
 
             rewardAmount = rewardAmount * rewardForDays;
             runningStep = RUNNING_STEP.APPLY_MISSING_REWARD;
-
             
-            
-            const amountToSend = rewardAmount * 1_000_000;
-            DEBUG && console.log(`Reward ${rewardAmount} $FRY for device ${device.miner_key}`);
+            const amountToSend = testMode ? 0 : rewardAmount * 1_000_000;
+            console.log(`Reward ${rewardAmount} $FRY for device ${device.miner_key}`);
 
                        
-
-            const dataUpdateResult = await DeviceModel.updateOne({miner_key: device.miner_key}, {$set: {
+            
+            const dataUpdateResult = testMode ? await TestDeviceModel.updateOne({miner_key: device.miner_key}, {$set: {
+                'staked.rewarded_time': currentDate}}) : await DeviceModel.updateOne({miner_key: device.miner_key}, {$set: {
                 'staked.rewarded_time': currentDate}});
             if (dataUpdateResult.matchedCount <= 0) {
                 DEBUG && console.log(`Data update for device ${device.miner_key} is failed`);
@@ -181,11 +181,20 @@ export const doRewards = async (devices: Device[], products: Product[], mainAcco
             }
             runningStep = RUNNING_STEP.DATA_UPDATED;
 
+            
+
             const partOfMinerKey = device.miner_key.split('-')[1].slice(0, 6);
-            const noteBasic = ((device.byod !== undefined && device.byod.length > 0) ? 'BYOD-' : '') + minerType + '-' + partOfMinerKey + '-' + rewardForDays + 'days';
-            DEBUG && console.log(`Note for device ${device.miner_key} is ${noteBasic}`);
+            const noteInfo = {
+                BYOD: device.byod !== undefined && device.byod.length > 0,
+                reward_amount: rewardAmount,
+                rewardDays: rewardForDays,
+                key: minerType + '-' + partOfMinerKey 
+            }
+            // const noteBasic = ((device.byod !== undefined && device.byod.length > 0) ? 'BYOD-' : '') + minerType + '-' + partOfMinerKey + '-' + rewardForDays + 'days';
+            const noteBasic = JSON.stringify(noteInfo);
+            console.log(`Note for device ${device.miner_key} is ${noteBasic}`);
             if (!(await hasOptedInForAsset(minerRewardAddr, config.asset_index))) {
-                DEBUG && console.log(`Reward wallet ${minerRewardAddr} for device ${device.miner_key} is not opted in $FRY`);
+                console.log(`Reward wallet ${minerRewardAddr} for device ${device.miner_key} is not opted in $FRY`);
                 await optInForAsset(mainAccount, minerRewardAddr, config.asset_index);
             }
             const note = enc.encode(noteBasic);
@@ -202,10 +211,7 @@ export const doRewards = async (devices: Device[], products: Product[], mainAcco
             
             DEBUG && console.log(`Reward Transaction id for device ${device.miner_key}: ${tx}`);
             runningStep = RUNNING_STEP.END;
-            // if (countForFaile === 0) {
-            //     errDevices.push({device: device, err: 'Failed'});
-            // }
-            // countForFaile = (countForFaile + 1) % 100;
+            
         } catch (error) {
             console.error(`Error for device ${device.miner_key} : ${error}`);
             errDevices.push({device: device, err: 'Failed'});
@@ -213,6 +219,19 @@ export const doRewards = async (devices: Device[], products: Product[], mainAcco
     } 
 
     return errDevices;
+}
+
+function getThreeHourIntervals(startDate: Date, endDate: Date) {
+    // Get the difference in milliseconds
+    const differenceInMs = endDate.getTime() - startDate.getTime();
+
+    // Convert the difference into hours
+    const totalHours = differenceInMs / (1000 * 60 * 60);
+
+    // Calculate how many 3-hour intervals are there
+    const threeHourIntervals = Math.floor(totalHours / 3);
+
+    return threeHourIntervals;
 }
 
 function generateRandomNumberString(length: number, options?: { includeLeadingZeroes?: boolean }): string {

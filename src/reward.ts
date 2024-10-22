@@ -213,6 +213,14 @@ export const doRewards = async (devices: Device[], products: Product[], mainAcco
             runningStep = RUNNING_STEP.END;
             
         } catch (error) {
+            if (runningStep === RUNNING_STEP.DATA_UPDATED) {
+                const dataUpdateResult = testMode ? await TestDeviceModel.updateOne({miner_key: device.miner_key}, {$set: {
+                    'staked.rewarded_time': device.staked?.rewarded_time}}) : await DeviceModel.updateOne({miner_key: device.miner_key}, {$set: {
+                    'staked.rewarded_time': device.staked?.rewarded_time}});
+                if (dataUpdateResult.matchedCount <= 0) {
+                    DEBUG && console.log(`Data update for device ${device.miner_key} is failed`);
+                }
+            }
             console.error(`Error for device ${device.miner_key} : ${error}`);
             errDevices.push({device: device, err: 'Failed'});
         }

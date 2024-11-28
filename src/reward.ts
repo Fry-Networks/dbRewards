@@ -35,7 +35,7 @@ enum RUNNING_STEP {
     REWARD_WALLET_CHECK,
     GET_REWARD_AMOUNT,
     APPLY_MISSING_REWARD,
-    DATA_UPDATED,
+    TRANSACTION_SENT,
     END,
 }
 
@@ -169,20 +169,6 @@ export const doRewards = async (devices: Device[], products: Product[], mainAcco
             const amountToSend = testMode ? 0 : rewardAmount * 1_000_000;
             console.log(`Reward ${rewardAmount} $FRY for device ${device.miner_key}`);
 
-                       
-            
-            const dataUpdateResult = testMode ? await TestDeviceModel.updateOne({miner_key: device.miner_key}, {$set: {
-                'staked.rewarded_time': currentDate}}) : await DeviceModel.updateOne({miner_key: device.miner_key}, {$set: {
-                'staked.rewarded_time': currentDate}});
-            if (dataUpdateResult.matchedCount <= 0) {
-                DEBUG && console.log(`Data update for device ${device.miner_key} is failed`);
-                errDevices.push({device: device, err: 'Failed'});
-                continue;
-            }
-            runningStep = RUNNING_STEP.DATA_UPDATED;
-
-            
-
             const partOfMinerKey = device.miner_key.split('-')[1].slice(0, 6);
             const noteInfo = {
                 BYOD: device.byod !== undefined && device.byod.length > 0,
@@ -210,13 +196,23 @@ export const doRewards = async (devices: Device[], products: Product[], mainAcco
             const tx = await client.sendRawTransaction(signedTxn).do();
             
             DEBUG && console.log(`Reward Transaction id for device ${device.miner_key}: ${tx}`);
+            runningStep = RUNNING_STEP.TRANSACTION_SENT;
+
+            const dataUpdateResult = testMode ? await TestDeviceModel.updateOne({miner_key: device.miner_key}, {$set: {
+                'staked.rewarded_time': currentDate}}) : await DeviceModel.updateOne({miner_key: device.miner_key}, {$set: {
+                'staked.rewarded_time': currentDate}});
+            if (dataUpdateResult.matchedCount <= 0) {
+                DEBUG && console.log(`Data update for device ${device.miner_key} is failed`);
+                errDevices.push({device: device, err: 'Failed'});
+                continue;
+            }
             runningStep = RUNNING_STEP.END;
             
         } catch (error) {
-            if (runningStep === RUNNING_STEP.DATA_UPDATED) {
+            if (runningStep >= RUNNING_STEP.TRANSACTION_SENT) {
                 const dataUpdateResult = testMode ? await TestDeviceModel.updateOne({miner_key: device.miner_key}, {$set: {
-                    'staked.rewarded_time': device.staked?.rewarded_time}}) : await DeviceModel.updateOne({miner_key: device.miner_key}, {$set: {
-                    'staked.rewarded_time': device.staked?.rewarded_time}});
+                    'staked.rewarded_time': currentDate}}) : await DeviceModel.updateOne({miner_key: device.miner_key}, {$set: {
+                    'staked.rewarded_time': currentDate}});
                 if (dataUpdateResult.matchedCount <= 0) {
                     DEBUG && console.log(`Data update for device ${device.miner_key} is failed`);
                 }

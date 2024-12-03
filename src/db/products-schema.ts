@@ -10,6 +10,10 @@ export const productsSchema = new mongoose.Schema({
         stake: {
             stake_one: { type: Number, default: 0},
             stake_two: { type: Number, default: 0},
+        }, 
+        tokens: {
+            stake: {type: String},
+            reward: {type: String}
         }
     },
     created_at: { type: Date, default: Date.now },
@@ -27,6 +31,10 @@ export interface Product extends mongoose.Document {
         stake?: {
             stake_one: number,
             stake_two: number
+        },
+        tokens?: {
+            stake: string,
+            reward: string
         }
     },
     type: string,

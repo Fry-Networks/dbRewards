@@ -21,6 +21,8 @@ import * as forge from 'node-forge';
 import * as fs from 'fs';
 import * as path from 'path';
 import { testMinerkeys } from './miner-keys';
+import { Reward, RewardModel, TestRewardModel } from './db/rewards-schema';
+import { sleep } from './main';
 
 interface ReturnDevice {
     device: Device;
@@ -32,6 +34,7 @@ enum RUNNING_STEP {
     START = 0,
     GET_CHAIN_PARAM = 1,
     FIND_PRODUCT = 2,
+    REWARDABLE_CHECK,
     REWARD_WALLET_CHECK,
     GET_REWARD_AMOUNT,
     APPLY_MISSING_REWARD,
@@ -56,6 +59,107 @@ function getDaysConsideringTime(startDate: Date, endDate: Date): number {
     return differenceInDays;
 }
 
+export const recordReward = async (device: Device, product: Product, amount: number) : Promise<boolean> => {
+    DEBUG && console.log(`Queue reward ${amount} to miner ${device.miner_key}'s pending list`);
+    const currentDate = new Date(Date.now());
+
+    try {
+        const bookedRecords = await (testMode ? TestRewardModel : RewardModel).find({miner_key: device.miner_key}) as Reward[];
+        const rewardNumber = bookedRecords.length + 1;
+        const result = testMode ? await TestRewardModel.create({
+            no: rewardNumber,
+            miner_key: device.miner_key,
+            status: 'pending',
+            amount: amount,
+            asset_id: product.reward.tokens && product.reward.tokens.reward,
+            createdAt: new Date(Date.now())
+        }) : await RewardModel.create({
+            no: rewardNumber,
+            miner_key: device.miner_key,
+            status: 'pending',
+            amount: amount,
+            asset_id: product.reward.tokens && product.reward.tokens.reward,
+            createdAt: new Date(Date.now())
+        })
+
+        if (!result) {
+            DEBUG && console.log(`Failed to record reward for miner ${device.miner_key}`);
+            return false;
+        }
+
+        return true;
+    } catch (error) {
+        DEBUG && console.error(error);
+        return false;
+    }
+}
+
+function getDaysBetweenDates(start: Date, end: Date): number {
+    // Parse the date strings into Date objects
+
+  
+    // Calculate the difference in milliseconds
+    const diffInMs = end.getTime() - start.getTime();
+  
+    // Convert milliseconds to days
+    const diffInDays = diffInMs / (1000 * 60 * 60 * 24);
+  
+    return Math.round(diffInDays); // Round to nearest day
+  }
+
+const pendingManage = async(device: Device, product: Product) : Promise<boolean> => {
+    const currentDate = new Date(Date.now());
+
+    try {
+        const rewardRecords = testMode ? await TestRewardModel.find({miner_key: device.miner_key, status: 'pending'}) as Reward[] : 
+                            await RewardModel.find({miner_key: device.miner_key, status: 'pending'}) as Reward[];
+
+        const needStatusChangeRecords = rewardRecords.filter((reward) => {
+            const rewardBookDate = new Date(reward.createdAt);
+            if (getDaysBetweenDates(rewardBookDate, currentDate) >= 30) {
+                return true;
+            }
+
+            return false;
+        })
+
+        for (let i = 0; i < needStatusChangeRecords.length; i++) {
+            const record = needStatusChangeRecords[i];
+            const result = testMode ? await TestRewardModel.updateOne({
+                miner_key: record.miner_key,
+                status: record.status,
+                asset_id: record.asset_id,
+                amount: record.amount,
+                createdAt: record.createdAt
+            }, {
+                $set: {
+                    status: 'claimable'
+                }
+            }) : await RewardModel.updateOne({
+                miner_key: record.miner_key,
+                status: record.status,
+                asset_id: record.asset_id,
+                amount: record.amount,
+                createdAt: record.createdAt
+            }, {
+                $set: {
+                    status: 'claimable'
+                }
+            })
+
+            if (result.matchedCount <= 0) {
+                DEBUG && console.log(`Didn't find the record: ${record}`);
+                return false;
+            }
+        }
+
+        return true;
+    } catch (error) {
+        DEBUG && console.error(error);
+        return false;
+    }
+}
+
 export const doRewards = async (devices: Device[], products: Product[], mainAccount: Account) : Promise<ReturnDevice[]> => {
     const   errDevices: ReturnDevice[] = [];
     let     chainParams: any;
@@ -76,13 +180,21 @@ export const doRewards = async (devices: Device[], products: Product[], mainAcco
             refreshParamCount = (refreshParamCount + 1) % 1000;
             runningStep = RUNNING_STEP.GET_CHAIN_PARAM;
 
+            //Get product of miner
             const minerType = device.miner_key.split('-')[0];
             const product = products.find((product) => product.key === minerType);
-            runningStep = RUNNING_STEP.FIND_PRODUCT;
             if (!product) {
                 DEBUG && console.log(`Product not found for miner ${device.miner_key}`);
                 continue;
             }
+            runningStep = RUNNING_STEP.FIND_PRODUCT;
+
+            //Check product rewardable
+            if (!product.reward.tokens || !product.reward.tokens.reward || product.reward.tokens.reward === 'none') {
+                DEBUG && console.log(`Product ${product.name} is not allowed to get reward`);
+                continue;
+            }
+            runningStep = RUNNING_STEP.REWARDABLE_CHECK;
 
             const minerRewardAddr = device.reward_wallet;
             if (!minerRewardAddr) {
@@ -90,6 +202,8 @@ export const doRewards = async (devices: Device[], products: Product[], mainAcco
                 errDevices.push({device: device, err: 'No reward wallet'});
                 continue;
             }
+
+            runningStep = RUNNING_STEP.REWARD_WALLET_CHECK;
 
             let rewardAmount = 0;
             let err: string = '';
@@ -105,23 +219,18 @@ export const doRewards = async (devices: Device[], products: Product[], mainAcco
                     
                     switch (device.staked.type) {
                         case 'one': {
-                            if (stakedAmount === product.reward.stake?.stake_one) {
-                                rewardAmount = Math.round(product.reward.verified * 100 * 1.5) / 100;
-                            } else {
-                                err = 'staked invalid amount';
-                            }
+                            rewardAmount = Math.round(product.reward.verified * 100 * 1.5) / 100;
+
                         }
                         break;
                         case 'two': {
-                            if (stakedAmount === product.reward.stake?.stake_two) {
-                                rewardAmount = Math.round(product.reward.verified * 100 * 3.0) / 100;
-                            } else {
-                                err = 'staked invalid amount';
-                            }
+                            rewardAmount = Math.round(product.reward.verified * 100 * 3.0) / 100;
+                            
                         }
                         break;
                         default: {
                             err = 'staked invalid amount';   
+                            rewardAmount = 0;
                         }
                     }
                 } else {
@@ -142,71 +251,82 @@ export const doRewards = async (devices: Device[], products: Product[], mainAcco
                 continue;
             }
 
-            let rewardForDays = 1;
-            DEBUG && console.log('Last rewarded time for device ' + device.miner_key + ' : ' + new Date(device.staked!.rewarded_time));
-            if (device.staked?.rewarded_time !== undefined && device.staked?.rewarded_time.getFullYear() >= 2024) {
-                if (new Date(device.staked.rewarded_time) > currentDate) {
-                    DEBUG && console.log(`Rewarded Time is invalid for device ${device.miner_key}`);
-                    errDevices.push({device: device, err: 'Invalid reward time'});
-                    continue;
-                }
+            const result = await recordReward(device, product, rewardAmount);
+            if (!result) {
+                errDevices.push({device, err: 'Recording reward failed'});
+            }
+
+            // const pendingManageResult = await pendingManage(device, product);
+            let retryManage = 0;
+            while (!pendingManage(device, product) && retryManage < 5) {
+                await sleep(500);
+                retryManage++;
+            }
+
+            // let rewardForDays = 1;
+            // DEBUG && console.log('Last rewarded time for device ' + device.miner_key + ' : ' + new Date(device.staked!.rewarded_time));
+            // if (device.staked?.rewarded_time !== undefined && device.staked?.rewarded_time.getFullYear() >= 2024) {
+            //     if (new Date(device.staked.rewarded_time) > currentDate) {
+            //         DEBUG && console.log(`Rewarded Time is invalid for device ${device.miner_key}`);
+            //         errDevices.push({device: device, err: 'Invalid reward time'});
+            //         continue;
+            //     }
                 
-                rewardForDays = testMode ? getThreeHourIntervals(new Date(device.staked.rewarded_time), currentDate) : getDaysConsideringTime(new Date(device.staked.rewarded_time), currentDate);
-            }
+            //     rewardForDays = testMode ? getThreeHourIntervals(new Date(device.staked.rewarded_time), currentDate) : getDaysConsideringTime(new Date(device.staked.rewarded_time), currentDate);
+            // }
 
-            if (rewardForDays > 5) {
-                DEBUG && console.log(`Missing days for device ${device.miner_key}: ${rewardForDays} days`);
-                rewardForDays = 1;
-            } else if (rewardForDays <= 0) {
-                DEBUG && console.log(`Already got rewarded`);
-                errDevices.push({device: device, err: 'Already rewarded'});
-                continue;
-            }
+            // if (rewardForDays > 5) {
+            //     DEBUG && console.log(`Missing days for device ${device.miner_key}: ${rewardForDays} days`);
+            //     rewardForDays = 1;
+            // } else if (rewardForDays <= 0) {
+            //     DEBUG && console.log(`Already got rewarded`);
+            //     errDevices.push({device: device, err: 'Already rewarded'});
+            //     continue;
+            // }
 
-            rewardAmount = Math.round(rewardAmount * 100 * rewardForDays) / 100;
-            runningStep = RUNNING_STEP.APPLY_MISSING_REWARD;
+            // rewardAmount = Math.round(rewardAmount * 100 * rewardForDays) / 100;
+            // runningStep = RUNNING_STEP.APPLY_MISSING_REWARD;
             
-            const amountToSend = testMode ? 0 : rewardAmount * 1_000_000;
-            console.log(`Reward ${rewardAmount} $FRY for device ${device.miner_key}`);
+            // const amountToSend = testMode ? 0 : rewardAmount * 1_000_000;
+            // console.log(`Reward ${rewardAmount} $FRY for device ${device.miner_key}`);
 
-            const partOfMinerKey = device.miner_key.split('-')[1].slice(0, 6);
-            const noteInfo = {
-                BYOD: device.byod !== undefined && device.byod.length > 0,
-                reward_amount: rewardAmount,
-                rewardDays: rewardForDays,
-                key: minerType + '-' + partOfMinerKey 
-            }
-            // const noteBasic = ((device.byod !== undefined && device.byod.length > 0) ? 'BYOD-' : '') + minerType + '-' + partOfMinerKey + '-' + rewardForDays + 'days';
-            const noteBasic = JSON.stringify(noteInfo);
-            console.log(`Note for device ${device.miner_key} is ${noteBasic}`);
-            if (!(await hasOptedInForAsset(minerRewardAddr, config.asset_index))) {
-                console.log(`Reward wallet ${minerRewardAddr} for device ${device.miner_key} is not opted in $FRY`);
-                await optInForAsset(mainAccount, minerRewardAddr, config.asset_index);
-            }
-            const note = enc.encode(noteBasic);
-            const txn = makeAssetTransferTxnWithSuggestedParamsFromObject({
-                from: mainAccount.addr,
-                to: minerRewardAddr,
-                amount: amountToSend,
-                assetIndex: config.asset_index,
-                note: note,
-                suggestedParams: chainParams
-            });
-            const signedTxn = txn.signTxn(mainAccount.sk);
-            const tx = await client.sendRawTransaction(signedTxn).do();
+            // const partOfMinerKey = device.miner_key.split('-')[1].slice(0, 6);
+            // const noteInfo = {
+            //     BYOD: device.byod !== undefined && device.byod.length > 0,
+            //     reward_amount: rewardAmount,
+            //     key: minerType + '-' + partOfMinerKey 
+            // }
+            // // const noteBasic = ((device.byod !== undefined && device.byod.length > 0) ? 'BYOD-' : '') + minerType + '-' + partOfMinerKey + '-' + rewardForDays + 'days';
+            // const noteBasic = JSON.stringify(noteInfo);
+            // console.log(`Note for device ${device.miner_key} is ${noteBasic}`);
+            // if (!(await hasOptedInForAsset(minerRewardAddr, config.asset_index))) {
+            //     console.log(`Reward wallet ${minerRewardAddr} for device ${device.miner_key} is not opted in $FRY`);
+            //     await optInForAsset(mainAccount, minerRewardAddr, config.asset_index);
+            // }
+            // const note = enc.encode(noteBasic);
+            // const txn = makeAssetTransferTxnWithSuggestedParamsFromObject({
+            //     from: mainAccount.addr,
+            //     to: minerRewardAddr,
+            //     amount: amountToSend,
+            //     assetIndex: config.asset_index,
+            //     note: note,
+            //     suggestedParams: chainParams
+            // });
+            // const signedTxn = txn.signTxn(mainAccount.sk);
+            // const tx = await client.sendRawTransaction(signedTxn).do();
             
-            DEBUG && console.log(`Reward Transaction id for device ${device.miner_key}: ${tx}`);
-            runningStep = RUNNING_STEP.TRANSACTION_SENT;
+            // DEBUG && console.log(`Reward Transaction id for device ${device.miner_key}: ${tx}`);
+            // runningStep = RUNNING_STEP.TRANSACTION_SENT;
 
-            const dataUpdateResult = testMode ? await TestDeviceModel.updateOne({miner_key: device.miner_key}, {$set: {
-                'staked.rewarded_time': currentDate}}) : await DeviceModel.updateOne({miner_key: device.miner_key}, {$set: {
-                'staked.rewarded_time': currentDate}});
-            if (dataUpdateResult.matchedCount <= 0) {
-                DEBUG && console.log(`Data update for device ${device.miner_key} is failed`);
-                errDevices.push({device: device, err: 'Failed'});
-                continue;
-            }
-            runningStep = RUNNING_STEP.END;
+            // const dataUpdateResult = testMode ? await TestDeviceModel.updateOne({miner_key: device.miner_key}, {$set: {
+            //     'staked.rewarded_time': currentDate}}) : await DeviceModel.updateOne({miner_key: device.miner_key}, {$set: {
+            //     'staked.rewarded_time': currentDate}});
+            // if (dataUpdateResult.matchedCount <= 0) {
+            //     DEBUG && console.log(`Data update for device ${device.miner_key} is failed`);
+            //     errDevices.push({device: device, err: 'Failed'});
+            //     continue;
+            // }
+            // runningStep = RUNNING_STEP.END;
             
         } catch (error) {
             if (runningStep >= RUNNING_STEP.TRANSACTION_SENT) {

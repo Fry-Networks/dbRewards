@@ -22,6 +22,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { testMinerkeys } from './miner-keys';
 import { doRewards } from './reward';
+import mongoose from 'mongoose';
 
 function loadPrivateKey(pemFilePath: string): string {
     return fs.readFileSync(pemFilePath, 'utf8');
@@ -67,10 +68,27 @@ const isStakeValid = (product: any): boolean => {
 
   const unverifyRewardDate = new Date(Date.now());
 
+  const ensureCollectionsExist = async (db: mongoose.Connection, collections: string[]) => {
+    const existingCollections = await db.db.listCollections().toArray();
+    const existingNames = existingCollections.map((col) => col.name);
+
+    for (const collectionName of collections) {
+        if (!existingNames.includes(collectionName)) {
+        await db.createCollection(collectionName);
+        console.log(`Collection '${collectionName}' created.`);
+        } else {
+        console.log(`Collection '${collectionName}' already exists.`);
+        }
+    }
+  };
+
 
 const main = async () => {
     await connect();
     const connection = getConnection();
+    const db = connection.connection;
+
+    await ensureCollectionsExist(db, ['rewards', 'test-rewards'])
     
     const rewardsConfig = await connection.connection.collection('configs').findOne({ name: 'rewards' });
     if (!testMode && !rewardsConfig?.enabled) {
@@ -88,12 +106,6 @@ const main = async () => {
     console.log(filtered);
     //console.log(await client.status().do());
     const account = mnemonicToSecretKey(process.env.MNEMONIC!);
-    const algoBalance = await getAlgoBalance(account.addr);
-    console.log('Algo in rewarding wallet: ' + algoBalance);
-    if (!algoBalance || algoBalance <= 10) {
-        console.log('No algo or not enough algo is in rewarding wallet');
-        return;
-    }
     //send the same amount to each address of FrysCrypto (FRY) which has a contract number: 924268058
     const products = await ProductModel.find({});
     let retryCount = 0;
@@ -149,9 +161,9 @@ async function getAlgoBalance(address: string) {
     }
 }
 
-function sleep(ms: number): Promise<void> {
+export function sleep(ms: number): Promise<void> {
     return new Promise(resolve => setTimeout(resolve, ms));
 }
 
 main()
-setInterval(main, (testMode ? 4 : 24) * 60 * 60 * 1000);
+setInterval(main, (testMode ? 10 * 60 * 1000 :  24 * 60 * 60 * 1000));

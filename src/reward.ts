@@ -228,7 +228,7 @@ export const isNodeStakingNeeded = (product: Product) => {
 };
 
 export const isRegistartionStaked = (device: Device) => {
-  if (device.registration && device.registration.amount !== 0) {
+  if (device.registration && device.registration.amount > 0) {
     return true;
   }
 
@@ -236,7 +236,7 @@ export const isRegistartionStaked = (device: Device) => {
 };
 
 export const isNodeStaked = (device: Device) => {
-  if (device.node && device.node.amount !== 0) {
+  if (device.node && device.node.amount > 0) {
     return true;
   }
 
@@ -288,6 +288,8 @@ export const doRewards = async (
       }
       runningStep = RUNNING_STEP.REWARDABLE_CHECK;
 
+      console.log(product.reward.tokens);
+
       if (
         isNodeProduct(product) &&
         ((isRegistrationNeeded(product) && !isRegistartionStaked(device)) ||
@@ -300,6 +302,8 @@ export const doRewards = async (
         continue;
       }
 
+      console.log(device.registration);
+
       if (
         isRegistartionStaked(device) &&
         device.registration?.asset_id !== product.reward.tokens.register
@@ -310,6 +314,8 @@ export const doRewards = async (
           );
         continue;
       }
+
+      console.log(device.node);
 
       if (
         isNodeStaked(device) &&

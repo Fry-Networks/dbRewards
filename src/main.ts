@@ -186,4 +186,4 @@ export function sleep(ms: number): Promise<void> {
 }
 
 main();
-setInterval(main, testMode ? 10 * 60 * 1000 : 1 * 60 * 60 * 1000);
+setInterval(main, testMode ? 10 * 60 * 1000 : 24 * 60 * 60 * 1000);

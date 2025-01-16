@@ -206,5 +206,7 @@ async function pendingManager() {
   }
 }
 
+main();
+
 setInterval(main, testMode ? 60 * 60 * 1000 : 24 * 60 * 60 * 1000);
 pendingManager();

@@ -27,7 +27,7 @@ import * as forge from "node-forge";
 import * as fs from "fs";
 import * as path from "path";
 import { testMinerkeys } from "./miner-keys";
-import { doRewards } from "./reward";
+import { doPendingManage, doRewards } from "./reward";
 import mongoose from "mongoose";
 
 function loadPrivateKey(pemFilePath: string): string {
@@ -185,5 +185,26 @@ export function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-main();
-setInterval(main, testMode ? 10 * 60 * 1000 : 24 * 60 * 60 * 1000);
+async function pendingManager() {
+  await connect();
+  const connection = getConnection();
+  const db = connection.connection;
+
+  await ensureCollectionsExist(db, ["rewards", "test-rewards"]);
+
+  while (true) {
+    const allDevices = testMode
+      ? ((await TestDeviceModel.find({ is_registered: true })) as Device[])
+      : ((await DeviceModel.find({ is_registered: true })) as Device[]);
+
+    const products = await ProductModel.find({});
+    const account = mnemonicToSecretKey(process.env.MNEMONIC!);
+
+    await doPendingManage(allDevices, products, account);
+
+    await sleep(10 * 60 * 1000);
+  }
+}
+
+setInterval(main, testMode ? 60 * 60 * 1000 : 24 * 60 * 60 * 1000);
+pendingManager();

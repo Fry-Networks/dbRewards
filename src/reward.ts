@@ -152,7 +152,7 @@ const pendingManage = async (
 
     const needStatusChangeRecords = rewardRecords.filter((reward) => {
       const rewardBookDate = new Date(reward.createdAt);
-      if (getDaysBetweenDates(rewardBookDate, currentDate) >= 30) {
+      if (getDaysConsideringTime(rewardBookDate, currentDate) >= 30) {
         return true;
       }
 
@@ -402,11 +402,11 @@ export const doRewards = async (
       }
 
       // const pendingManageResult = await pendingManage(device, product);
-      let retryManage = 0;
-      while (!pendingManage(device, product) && retryManage < 5) {
-        await sleep(500);
-        retryManage++;
-      }
+      // let retryManage = 0;
+      // while (!pendingManage(device, product) && retryManage < 5) {
+      //   await sleep(500);
+      //   retryManage++;
+      // }
 
       // let rewardForDays = 1;
       // DEBUG && console.log('Last rewarded time for device ' + device.miner_key + ' : ' + new Date(device.staked!.rewarded_time));
@@ -536,6 +536,26 @@ function generateRandomNumberString(
 
   return digits.join("-Optin");
 }
+
+export const doPendingManage = async (
+  devices: Device[],
+  products: Product[],
+  mainAccount: Account
+) => {
+  for (const device of devices) {
+    const minerType = device.miner_key.split("-")[0];
+    const product = products.find((product) => product.key === minerType);
+    if (!product) {
+      DEBUG && console.log(`Product not found for miner ${device.miner_key}`);
+      continue;
+    }
+    let retryManage = 0;
+    while (!pendingManage(device, product) && retryManage < 5) {
+      await sleep(500);
+      retryManage++;
+    }
+  }
+};
 
 async function hasOptedInForAsset(
   address: string,

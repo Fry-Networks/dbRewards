@@ -96,7 +96,7 @@ const ensureCollectionsExist = async (
 };
 
 const main = async () => {
-  await connect();
+  // await connect();
   const connection = getConnection();
   const db = connection.connection;
 
@@ -196,7 +196,8 @@ async function pendingManager() {
 }
 
 async function Logic() {
-  await main();
+  await connect();
+  // await main();
 
   setInterval(main, testMode ? 60 * 60 * 1000 : 24 * 60 * 60 * 1000);
   pendingManager();

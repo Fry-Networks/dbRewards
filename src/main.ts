@@ -128,32 +128,26 @@ const main = async () => {
 
   while (retryCount < 5) {
     const errDevices = await doRewards(filtered, products, account);
-
     errDevices.map((value) => {
       console.log(
         `Failed to reward for device ${value.device.miner_key} with error: ${value.err}`
       );
     });
-
     const retryRewardDevices = errDevices
       .filter((value) => {
         if (value.err === "Failed") {
           return true;
         }
-
         return false;
       })
       .map((value) => value.device);
-
     if (retryRewardDevices.length === 0) {
       break;
     } else {
       console.log(`Failed to reward for ${retryRewardDevices.length} devices`);
     }
-
     filtered = retryRewardDevices;
     retryCount++;
-
     await sleep(10 * 60 * 1000);
   }
 
@@ -186,12 +180,7 @@ export function sleep(ms: number): Promise<void> {
 }
 
 async function pendingManager() {
-  await connect();
-  const connection = getConnection();
-  const db = connection.connection;
-
-  await ensureCollectionsExist(db, ["rewards", "test-rewards"]);
-
+  console.log("Pending Manager");
   while (true) {
     const allDevices = testMode
       ? ((await TestDeviceModel.find({ is_registered: true })) as Device[])
@@ -202,11 +191,15 @@ async function pendingManager() {
 
     await doPendingManage(allDevices, products, account);
 
-    await sleep(10 * 60 * 1000);
+    await sleep(2 * 60 * 1000);
   }
 }
 
-main();
+async function Logic() {
+  await main();
 
-setInterval(main, testMode ? 60 * 60 * 1000 : 24 * 60 * 60 * 1000);
-pendingManager();
+  setInterval(main, testMode ? 60 * 60 * 1000 : 24 * 60 * 60 * 1000);
+  pendingManager();
+}
+
+Logic();

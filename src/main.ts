@@ -195,8 +195,8 @@ async function rewardSystem() {
     currentDate.getDate() !== updatedDate.getDate() &&
     currentDate.getHours() >= 18
   ) {
-    await main();
     updatedDate = currentDate;
+    await main();
   }
 }
 

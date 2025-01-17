@@ -152,8 +152,7 @@ const pendingManage = async (
 
     const needStatusChangeRecords = rewardRecords.filter((reward) => {
       const rewardBookDate = new Date(reward.createdAt);
-      const days = getDaysConsideringTime(rewardBookDate, currentDate);
-      if (getDaysConsideringTime(rewardBookDate, currentDate) >= 30) {
+      if (getDaysBetweenDates(rewardBookDate, currentDate) >= 30) {
         return true;
       }
 
@@ -403,11 +402,13 @@ export const doRewards = async (
       }
 
       // const pendingManageResult = await pendingManage(device, product);
-      // let retryManage = 0;
-      // while (!pendingManage(device, product) && retryManage < 5) {
-      //   await sleep(500);
-      //   retryManage++;
-      // }
+      let retryManage = 0;
+      while (!pendingManage(device, product) && retryManage < 5) {
+        await sleep(500);
+        retryManage++;
+      }
+
+      await sleep(20);
 
       // let rewardForDays = 1;
       // DEBUG && console.log('Last rewarded time for device ' + device.miner_key + ' : ' + new Date(device.staked!.rewarded_time));
@@ -474,6 +475,29 @@ export const doRewards = async (
       // }
       // runningStep = RUNNING_STEP.END;
     } catch (error) {
+      if (runningStep >= RUNNING_STEP.TRANSACTION_SENT) {
+        const dataUpdateResult = testMode
+          ? await TestDeviceModel.updateOne(
+              { miner_key: device.miner_key },
+              {
+                $set: {
+                  "staked.rewarded_time": currentDate,
+                },
+              }
+            )
+          : await DeviceModel.updateOne(
+              { miner_key: device.miner_key },
+              {
+                $set: {
+                  "staked.rewarded_time": currentDate,
+                },
+              }
+            );
+        if (dataUpdateResult.matchedCount <= 0) {
+          DEBUG &&
+            console.log(`Data update for device ${device.miner_key} is failed`);
+        }
+      }
       console.error(`Error for device ${device.miner_key} : ${error}`);
       errDevices.push({ device: device, err: "Failed" });
     }
@@ -514,27 +538,6 @@ function generateRandomNumberString(
 
   return digits.join("-Optin");
 }
-
-export const doPendingManage = async (
-  devices: Device[],
-  products: Product[],
-  mainAccount: Account
-) => {
-  console.log("Do Pending Manage");
-  for (const device of devices) {
-    const minerType = device.miner_key.split("-")[0];
-    const product = products.find((product) => product.key === minerType);
-    if (!product) {
-      DEBUG && console.log(`Product not found for miner ${device.miner_key}`);
-      continue;
-    }
-    let retryManage = 0;
-    while (!pendingManage(device, product) && retryManage < 5) {
-      await sleep(500);
-      retryManage++;
-    }
-  }
-};
 
 async function hasOptedInForAsset(
   address: string,

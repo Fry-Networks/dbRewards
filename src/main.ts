@@ -27,7 +27,7 @@ import * as forge from "node-forge";
 import * as fs from "fs";
 import * as path from "path";
 import { testMinerkeys } from "./miner-keys";
-import { doPendingManage, doRewards } from "./reward";
+import { doRewards } from "./reward";
 import mongoose from "mongoose";
 
 function loadPrivateKey(pemFilePath: string): string {
@@ -96,7 +96,7 @@ const ensureCollectionsExist = async (
 };
 
 const main = async () => {
-  // await connect();
+  await connect();
   const connection = getConnection();
   const db = connection.connection;
 
@@ -128,26 +128,32 @@ const main = async () => {
 
   while (retryCount < 5) {
     const errDevices = await doRewards(filtered, products, account);
+
     errDevices.map((value) => {
       console.log(
         `Failed to reward for device ${value.device.miner_key} with error: ${value.err}`
       );
     });
+
     const retryRewardDevices = errDevices
       .filter((value) => {
         if (value.err === "Failed") {
           return true;
         }
+
         return false;
       })
       .map((value) => value.device);
+
     if (retryRewardDevices.length === 0) {
       break;
     } else {
       console.log(`Failed to reward for ${retryRewardDevices.length} devices`);
     }
+
     filtered = retryRewardDevices;
     retryCount++;
+
     await sleep(10 * 60 * 1000);
   }
 
@@ -179,28 +185,20 @@ export function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-async function pendingManager() {
-  console.log("Pending Manager");
-  while (true) {
-    const allDevices = testMode
-      ? ((await TestDeviceModel.find({ is_registered: true })) as Device[])
-      : ((await DeviceModel.find({ is_registered: true })) as Device[]);
+// main();
+// setInterval(main, testMode ? 60 * 60 * 1000 : 24 * 60 * 60 * 1000);
 
-    const products = await ProductModel.find({});
-    const account = mnemonicToSecretKey(process.env.MNEMONIC!);
-
-    await doPendingManage(allDevices, products, account);
-
-    await sleep(2 * 60 * 1000);
+let updatedDate = new Date(0);
+async function rewardSystem() {
+  const currentDate = new Date(Date.now());
+  if (
+    currentDate.getDate() !== updatedDate.getDate() &&
+    currentDate.getHours() >= 18
+  ) {
+    await main();
+    updatedDate = currentDate;
   }
 }
 
-async function Logic() {
-  await connect();
-  // await main();
-
-  setInterval(main, testMode ? 60 * 60 * 1000 : 24 * 60 * 60 * 1000);
-  pendingManager();
-}
-
-Logic();
+rewardSystem();
+setInterval(rewardSystem, 60 * 60 * 1000);

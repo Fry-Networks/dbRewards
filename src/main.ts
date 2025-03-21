@@ -18,7 +18,6 @@ const client = new Algodv2(tokenToSend, server, port);
 
 const indexer = new Indexer(tokenToSend, indexServer, port);
 
-import config from "../config.json";
 import { connect, getConnection } from "./db/connect";
 import { Device, DeviceModel, TestDeviceModel } from "./db/devices-schema";
 import "dotenv/config";

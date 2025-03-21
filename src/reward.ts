@@ -106,7 +106,7 @@ const getAvailableReward = async (device: Device, amount: number): Promise<numbe
       const transactionDate = new Date(transaction['round-time'] * 1000);
       const isTheSender = transaction.sender === account.addr;
       const isAmountZero = !transaction['asset-transfer-transaction'] || transaction['asset-transfer-transaction'].amount === 0;
-      const isFRY = transaction['asset-transfer-transaction'] && transaction['asset-transfer-transaction']['asset-id'] === 924268058;
+      const isFRY = transaction['asset-transfer-transaction'] && transaction['asset-transfer-transaction']['asset-id'] === 2485314946;
       const note = transaction.note;
       const decodeBase64 = Buffer.from(note, 'base64').toString('utf-8');
       let isSameDevice = false;
@@ -139,7 +139,14 @@ export const recordReward = async (
   amount: number
 ): Promise<boolean> => {
 
-  const availableAmount = await getAvailableReward(device, amount);
+  const keyword = "Air";
+  const str = device.name;
+  let availableAmount = 0;
+  if (str.includes(keyword)) { 
+    availableAmount = await getAvailableReward(device, amount);
+  } else {
+    availableAmount = amount;
+  }
   
   DEBUG &&
     console.log(

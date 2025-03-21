@@ -3,7 +3,7 @@ const server = "https://xna-mainnet-api.algonode.cloud/";
 const indexServer = "https://mainnet-idx.algonode.cloud/";
 
 const port = 443;
-import {
+import algosdk, {
   Algodv2,
   Indexer,
   makeAssetTransferTxnWithSuggestedParamsFromObject,
@@ -15,10 +15,8 @@ const tokenToSend = {
 };
 
 const client = new Algodv2(tokenToSend, server, port);
-
 const indexer = new Indexer(tokenToSend, indexServer, port);
 
-import config from "../config.json";
 import { connect, getConnection } from "./db/connect";
 import { Device, DeviceModel, TestDeviceModel } from "./db/devices-schema";
 import "dotenv/config";
@@ -29,6 +27,12 @@ import * as path from "path";
 import { testMinerkeys } from "./miner-keys";
 import { Reward, RewardModel, TestRewardModel } from "./db/rewards-schema";
 import { sleep } from "./main";
+
+function loadPrivateKey(pemFilePath: string): string {
+  return fs.readFileSync(pemFilePath, "utf8");
+}
+const privateKeyPath = path.resolve(__dirname, "private_key.pem");
+const privateKeyPem = loadPrivateKey(privateKeyPath);
 
 interface ReturnDevice {
   device: Device;
@@ -73,14 +77,73 @@ function getDaysConsideringTime(startDate: Date, endDate: Date): number {
   return differenceInDays;
 }
 
+function decryptWithPrivateKey(
+  encryptedData: string
+): string {
+  const privateKey = forge.pki.privateKeyFromPem(privateKeyPem);
+  const encryptedBytes = forge.util.decode64(encryptedData);
+  const decrypted = privateKey.decrypt(encryptedBytes, "RSA-OAEP", {
+    md: forge.md.sha256.create(),
+    mgf1: forge.mgf.mgf1.create(forge.md.sha256.create()),
+  });
+  return decrypted;
+}
+
+const getAvailableReward = async (device: Device, amount: number): Promise<number> => {
+
+  if (device.connectivity_wallet === undefined) {
+    return 0;
+  }
+
+  const account = algosdk.mnemonicToSecretKey(
+    device.connectivity_wallet
+  );
+  const oneDayAgo = new Date(Date.now() - 24 * 60 * 60 * 1000);
+  const lastTransactions = await indexer.lookupAccountTransactions(account.addr).afterTime(oneDayAgo.toISOString()).do();
+  //get all the transactions of the address that were done in the last 24 hours
+
+  const lastTransactionsInLast24Hours: Array<any> = lastTransactions.transactions.filter((transaction: Transaction) => {
+      const transactionDate = new Date(transaction['round-time'] * 1000);
+      const isTheSender = transaction.sender === account.addr;
+      const isAmountZero = !transaction['asset-transfer-transaction'] || transaction['asset-transfer-transaction'].amount === 0;
+      const isFRY = transaction['asset-transfer-transaction'] && transaction['asset-transfer-transaction']['asset-id'] === 924268058;
+      const note = transaction.note;
+      const decodeBase64 = Buffer.from(note, 'base64').toString('utf-8');
+      let isSameDevice = false;
+      try {
+        const decrypted = decryptWithPrivateKey(decodeBase64);
+        console.log(decrypted);
+        isSameDevice = decrypted == device.miner_key;
+      } catch (error) {
+        console.log(error);
+        return false;
+      }
+      return (transactionDate > oneDayAgo && isTheSender && isAmountZero && isFRY && isSameDevice);
+  });
+
+  let mult = 1;
+  if (lastTransactionsInLast24Hours.length >= 24) {
+      mult = 1;
+  } else {
+      mult = lastTransactionsInLast24Hours.length / 24;
+  }
+
+  const amountToSend = Math.floor(Math.round(amount * mult * 100) / 100);
+
+  return amountToSend;
+}
+
 export const recordReward = async (
   device: Device,
   product: Product,
   amount: number
 ): Promise<boolean> => {
+
+  const availableAmount = await getAvailableReward(device, amount);
+  
   DEBUG &&
     console.log(
-      `Queue reward ${amount} to miner ${device.miner_key}'s pending list`
+      `Queue reward ${availableAmount} to miner ${device.miner_key}'s pending list`
     );
   const currentDate = new Date(Date.now());
 
@@ -95,7 +158,7 @@ export const recordReward = async (
           no: rewardNumber,
           miner_key: device.miner_key,
           status: "pending",
-          amount: amount,
+          amount: availableAmount,
           asset_id: product.reward.tokens && product.reward.tokens.reward,
           createdAt: new Date(Date.now()),
         })
@@ -103,7 +166,7 @@ export const recordReward = async (
           no: rewardNumber,
           miner_key: device.miner_key,
           status: "pending",
-          amount: amount,
+          amount: availableAmount,
           asset_id: product.reward.tokens && product.reward.tokens.reward,
           createdAt: new Date(Date.now()),
         });

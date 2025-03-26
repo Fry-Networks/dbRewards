@@ -139,14 +139,15 @@ export const recordReward = async (
   amount: number
 ): Promise<boolean> => {
 
-  const keyword = "Air";
-  const str = device.name;
-  let availableAmount = 0;
-  if (str.includes(keyword)) { 
-    availableAmount = await getAvailableReward(device, amount);
-  } else {
-    availableAmount = amount;
-  }
+  // const keyword = "Air";
+  // const str = device.name;
+  // let availableAmount = 0;
+  // if (str.includes(keyword)) { 
+  //   availableAmount = await getAvailableReward(device, amount);
+  // } else {
+  //   availableAmount = amount;
+  // }
+  const availableAmount = amount;
   
   DEBUG &&
     console.log(

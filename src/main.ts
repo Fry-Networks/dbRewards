@@ -189,14 +189,14 @@ export function sleep(ms: number): Promise<void> {
 
 let updatedDate = new Date(0);
 async function rewardSystem() {
-  // const currentDate = new Date(Date.now());
-  // if (
-  //   currentDate.getDate() !== updatedDate.getDate() &&
-  //   currentDate.getHours() >= 18
-  // ) {
-  //   updatedDate = currentDate;
+  const currentDate = new Date(Date.now());
+  if (
+    currentDate.getDate() !== updatedDate.getDate() &&
+    currentDate.getHours() >= 18
+  ) {
+    updatedDate = currentDate;
     await main();
-  // }
+  }
 }
 
 rewardSystem();

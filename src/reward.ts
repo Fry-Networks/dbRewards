@@ -137,7 +137,6 @@ const getAvailableReward = async (device: Device, amount: number): Promise<numbe
   // console.log("last Txs : ", lastTransactions.transactions.length, oneDayAgo, oneDayAgo.toISOString());
 
   const lastTransactionsInLast24Hours: Array<any> = lastTransactions.transactions.filter((transaction: Transaction) => {
-      console.log(transaction.id);
       const transactionDate = new Date(transaction['round-time'] * 1000);
       const isTheSender = transaction.sender === account.addr;
       const isAmountZero = !transaction['asset-transfer-transaction'] || transaction['asset-transfer-transaction'].amount === 0;

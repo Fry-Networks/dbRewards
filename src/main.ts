@@ -118,7 +118,7 @@ const main = async () => {
   //const filtered = allDevices.filter((device) => device.reward_wallet)
   // const filtered = allDevices.filter((device) => device.miner_key.split('-')[0] == "CN");
   let filtered = allDevices;
-  console.log(filtered);
+  // console.log(filtered);
   //console.log(await client.status().do());
   const account = mnemonicToSecretKey(process.env.MNEMONIC!);
   //send the same amount to each address of FrysCrypto (FRY) which has a contract number: 924268058
@@ -189,14 +189,14 @@ export function sleep(ms: number): Promise<void> {
 
 let updatedDate = new Date(0);
 async function rewardSystem() {
-  const currentDate = new Date(Date.now());
-  if (
-    currentDate.getDate() !== updatedDate.getDate() &&
-    currentDate.getHours() >= 18
-  ) {
-    updatedDate = currentDate;
+  // const currentDate = new Date(Date.now());
+  // if (
+  //   currentDate.getDate() !== updatedDate.getDate() &&
+  //   currentDate.getHours() >= 18
+  // ) {
+  //   updatedDate = currentDate;
     await main();
-  }
+  // }
 }
 
 rewardSystem();

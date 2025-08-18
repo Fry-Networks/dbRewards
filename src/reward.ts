@@ -28,6 +28,38 @@ import { testMinerkeys } from "./miner-keys";
 import { Reward, RewardModel, TestRewardModel } from "./db/rewards-schema";
 import { sleep } from "./main";
 
+const minerType = {
+  weather: [ "HWM", "LWM" ],
+  air: ["IHAQM", "ILAQM", "OMAQM", "IMAQM", "OHAQM"],
+  water: ["OLWQM", "OHWQM"],
+  radiation: ["IRM"],
+  hardware: ["ISM", "OSM", "BM", "IDM", "ODM"],
+  camera: [
+    'AOWSCM',
+    'AOWCM',
+    'AIWCM',
+    'AOSCM',
+    'AISCM',
+    'AOTCM',
+    'AITCM',
+    'AIWSCM'
+  ],
+  energy: ["EM"],
+};
+
+type MinerCategory = keyof typeof minerType;
+type MinerType = (typeof minerType)[MinerCategory][number];
+
+/**
+ * Check if a string exists in any miner type category.
+ * @param value - String to check.
+ * @returns True if found in minerType values, false otherwise.
+ */
+function isValidMinerType(minerKey: string): minerKey is MinerType {
+  const prefix = minerKey.split('-')[0];
+  return Object.values(minerType).some((types) => types.includes(prefix));
+}
+
 function loadPrivateKey(pemFilePath: string): string {
   return fs.readFileSync(pemFilePath, "utf8");
 }
@@ -102,7 +134,10 @@ const getAvailableReward = async (device: Device, amount: number): Promise<numbe
   const lastTransactions = await indexer.lookupAccountTransactions(account.addr).afterTime(oneDayAgo.toISOString()).do();
   //get all the transactions of the address that were done in the last 24 hours
 
+  // console.log("last Txs : ", lastTransactions.transactions.length, oneDayAgo, oneDayAgo.toISOString());
+
   const lastTransactionsInLast24Hours: Array<any> = lastTransactions.transactions.filter((transaction: Transaction) => {
+      console.log(transaction.id);
       const transactionDate = new Date(transaction['round-time'] * 1000);
       const isTheSender = transaction.sender === account.addr;
       const isAmountZero = !transaction['asset-transfer-transaction'] || transaction['asset-transfer-transaction'].amount === 0;
@@ -112,14 +147,16 @@ const getAvailableReward = async (device: Device, amount: number): Promise<numbe
       let isSameDevice = false;
       try {
         const decrypted = decryptWithPrivateKey(decodeBase64);
-        console.log(decrypted);
+        // console.log(decrypted);
         isSameDevice = decrypted == device.miner_key;
       } catch (error) {
-        console.log(error);
+        console.log(transaction.id + " : " + error);
         return false;
       }
       return (transactionDate > oneDayAgo && isTheSender && isAmountZero && isFRY && isSameDevice);
   });
+
+  console.log(`${device.miner_key} : ${lastTransactionsInLast24Hours.length} Tx counts on ${account.addr.toString()} poc wallet`);
 
   let mult = 1;
   if (lastTransactionsInLast24Hours.length >= 24) {
@@ -139,15 +176,20 @@ export const recordReward = async (
   amount: number
 ): Promise<boolean> => {
 
-  // const keyword = "Air";
-  // const str = device.name;
-  // let availableAmount = 0;
-  // if (str.includes(keyword)) { 
-  //   availableAmount = await getAvailableReward(device, amount);
-  // } else {
-  //   availableAmount = amount;
-  // }
-  const availableAmount = amount;
+
+  const isValid = isValidMinerType(device.miner_key);
+
+  DEBUG &&
+    console.log(
+      `${device.miner_key} is Valid? : ${isValid}`
+    );
+
+  let availableAmount = 0;
+  if (isValid) { 
+    availableAmount = await getAvailableReward(device, amount);
+  } else {
+    availableAmount = amount;
+  }
   
   DEBUG &&
     console.log(

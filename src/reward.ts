@@ -177,12 +177,13 @@ export const recordReward = async (
 ): Promise<boolean> => {
 
 
-  const isValid = isValidMinerType(device.miner_key);
+  // const isValid = isValidMinerType(device.miner_key);
+  const isValid = false;
 
-  DEBUG &&
-    console.log(
-      `${device.miner_key} is Valid? : ${isValid}`
-    );
+  // DEBUG &&
+  //   console.log(
+  //     `${device.miner_key} is Valid? : ${isValid}`
+  //   );
 
   let availableAmount = 0;
   if (isValid) { 

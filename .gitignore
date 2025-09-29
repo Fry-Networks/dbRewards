@@ -8,3 +8,7 @@ private_key.pem
 dist
 backpay-validations
 *.md
+op.sh
+config.json
+.tokens/admin-tokens.json
+reward-reports

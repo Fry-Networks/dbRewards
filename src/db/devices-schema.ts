@@ -64,7 +64,6 @@ export const devicesSchema = new mongoose.Schema({
       type: String,
     },
   },
-  connectivity_wallet: String,
 });
 
 export interface Device extends mongoose.Document {
@@ -97,7 +96,6 @@ export interface Device extends mongoose.Document {
     txId: string;
     time: Date;
   };
-  connectivity_wallet?: string;
 }
 
 export const DeviceModel = mongoose.model<Device>("devices", devicesSchema);

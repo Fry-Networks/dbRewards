@@ -6,8 +6,9 @@ export const rewardsSchema = new mongoose.Schema({
     status: String,
     asset_id: String,
     amount: Number,
-    createdAt: Date
- 
+    createdAt: Date,
+    txId: String,
+    claimedAt: Date 
 });
 export interface Reward extends mongoose.Document {
    no: number,
@@ -15,8 +16,9 @@ export interface Reward extends mongoose.Document {
    status: string,
    asset_id: string,
    amount: number,
-   createdAt: Date
-
+   createdAt: Date,
+   txId: String,
+   claimedAt: Date
 }
 
 export const RewardModel = mongoose.model<Reward>('rewards', rewardsSchema);

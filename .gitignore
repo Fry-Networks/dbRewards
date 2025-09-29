@@ -4,3 +4,7 @@ build
 .env
 test.ts
 private_key.pem
+.dockerignore
+dist
+backpay-validations
+*.md

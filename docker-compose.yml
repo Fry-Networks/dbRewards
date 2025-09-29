@@ -1,0 +1,93 @@
+services:
+  dbrewards:
+    build: .
+    container_name: dbrewards-prod
+    restart: unless-stopped
+    environment:
+      # 1Password secrets injection
+      OP_SERVICE_ACCOUNT_TOKEN: ${OP_SERVICE_ACCOUNT_TOKEN?missing_OP_SERVICE_ACCOUNT_TOKEN}
+      MONGO_URI: op://dbRewards/MONGO_URI/password
+      CREDS_MONGO_URI: op://dbRewards/CREDS_MONGO_URI/password
+      DISCORD_WEBHOOK_URL: op://dbRewards/DISCORD_WEBHOOK_URL/password
+      # Static configuration
+      NODE_ENV: production
+      WEEKLY_REWARDS_ENABLED: true
+      NEXT_PUBLIC_WEEKLY_REWARDS_ENABLED: true
+      SIMULATION_ENABLED: false
+      TEST_MODE: false
+      DEBUG: false
+      ALERTS_ENABLED: true
+      DASHBOARD_PORT: 30033
+      ALERT_MAX_FAILURE_RATE: 20
+      ALERT_MAX_PROCESSING_TIME: 45
+      ALERT_MAX_SLOW_QUERY_RATE: 15
+      ALERT_MAX_ERROR_RATE: 5
+      MATURATION_ENABLED: true
+      RUN_DAILY_MATURATION_ONCE: false
+      DAILY_MATURATION_ONCE_TIMEBASE: real
+      ADMIN_ALLOWED_IPS:
+      ADMIN_ENDPOINTS_ENABLED: false
+    volumes:
+      - ./logs:/app/logs
+      - ./backups:/app/backups
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    ports:
+      - "30033:30033"  # Web dashboard
+    networks:
+      - dbrewards-network
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:30033/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # Optional: Simulation/test mode service (disabled by default)
+  dbrewards-sim:
+    build: .
+    container_name: dbrewards-sim
+    restart: "no"
+    profiles:
+      - simulation
+    environment:
+      # 1Password secrets injection
+      OP_SERVICE_ACCOUNT_TOKEN: ${OP_SERVICE_ACCOUNT_TOKEN?missing_OP_SERVICE_ACCOUNT_TOKEN}
+      MONGO_URI: op://dbRewards/MONGO_URI/password
+      CREDS_MONGO_URI: op://dbRewards/CREDS_MONGO_URI/password
+      DISCORD_WEBHOOK_URL: op://dbRewards/DISCORD_WEBHOOK_URL/password
+      # Simulation mode configuration
+      NODE_ENV: development
+      WEEKLY_REWARDS_ENABLED: true
+      SIMULATION_ENABLED: true
+      NEXT_PUBLIC_WEEKLY_REWARDS_ENABLED: true
+      TIME_ACCEL: 8
+      SIM_START_AT: "2025-09-28T23:00:00Z"
+      TEST_MODE: false
+      DEBUG: false
+      ALERTS_ENABLED: false
+      DASHBOARD_PORT: 30032
+      MATURATION_ENABLED: true
+      RUN_DAILY_MATURATION_ONCE: false
+      DAILY_MATURATION_ONCE_TIMEBASE: real
+      DAILY_MATURATION_ENABLED: false
+      WEEKLY_MATURATION_ENABLED: false
+    volumes:
+      - ./logs:/app/logs
+    ports:
+      - "30032:30032"  # Web dashboard for simulation
+    networks:
+      - dbrewards-network
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "5m"
+        max-file: "2"
+
+networks:
+  dbrewards-network:
+    driver: bridge

@@ -1,15 +1,59 @@
 {
+  "name": "dbrewards-optimized",
+  "version": "2.0.0",
+  "description": "Optimized hourly dbRewards processing system with audit and backpay tools",
+  "main": "dist/main.js",
+  "scripts": {
+    "build": "tsc",
+    "start": "node dist/main.js",
+    "dev": "tsc && node dist/main.js",
+    "start:accelerate": "tsc && node dist/main.js",
+    "start:test": "TEST_MODE=true node dist/main.js",
+    "audit": "tsc && node dist/scripts/reward-audit.js",
+    "audit:test": "TEST_MODE=true tsc && node dist/scripts/reward-audit.js",
+    "audit:dry": "tsc && node dist/scripts/reward-audit.js",
+    "backpay": "tsc && node dist/scripts/backpay.js",
+    "backpay:test": "TEST_MODE=true tsc && node dist/scripts/backpay.js",
+    "backpay:analyze": "tsc && node dist/scripts/backpay.js",
+    "health": "tsc && node dist/health-check.js",
+    "health:test": "TEST_MODE=true tsc && node dist/health-check.js",
+    "health:json": "tsc && node dist/health-check.js --json",
+    "health:quiet": "tsc && node dist/health-check.js --quiet",
+    "dashboard": "tsc && node dist/scripts/web-dashboard.js",
+    "dashboard:test": "TEST_MODE=true tsc && node dist/scripts/web-dashboard.js",
+    "compile": "tsc --noEmit",
+    "debug": "DEBUG=true tsc && node dist/main.js",
+    "migrate-rewards": "tsc && node dist/scripts/migrate-rewards.js",
+    "migrate-rewards:dry-run": "tsc && node dist/scripts/migrate-rewards.js --dry-run",
+    "migrate-rewards:validate": "tsc && node dist/scripts/migrate-rewards.js validate",
+    "migrate-devices": "tsc && node dist/scripts/migrate-devices.js",
+    "migrate-devices:dry-run": "tsc && node dist/scripts/migrate-devices.js --dry-run",
+    "backfill-claimed-at": "tsc && node dist/scripts/backfill-claimed-at.js",
+    "backfill-claimed-at:dry": "tsc && node dist/scripts/backfill-claimed-at.js --dry-run",
+    "dedupe-accruing": "tsc && node dist/scripts/dedupe-accruing.js",
+    "dedupe-accruing:dry": "tsc && node dist/scripts/dedupe-accruing.js --dry-run"
+  },
   "dependencies": {
     "algosdk": "^1.24.0",
     "axios": "^1.4.0",
     "dotenv": "^16.3.1",
+    "express": "^4.18.2",
     "mongoose": "^7.4.4",
     "node-forge": "^1.3.1",
-    "tsc": "^2.0.4",
-    "typescript": "^4.9.4"
+    "typescript": "^4.9.5"
   },
   "devDependencies": {
+    "@types/express": "^4.17.17",
     "@types/node": "^18.11.13",
     "@types/node-forge": "^1.3.11"
-  }
+  },
+  "keywords": [
+    "blockchain",
+    "rewards",
+    "mongodb",
+    "algorand",
+    "hourly-processing"
+  ],
+  "author": "dbRewards Optimization Team",
+  "license": "ISC"
 }

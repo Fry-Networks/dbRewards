@@ -31,6 +31,57 @@ const envConfig: RequiredEnvVars = {
     description: "Collection name for hardware credential documents",
     example: "hardware"
   },
+  
+  // Hardware Validation Controls
+  VALIDATE_HARDWARE_AEM: {
+    required: false,
+    description: "Enable credential/MAC validation for AI Edge Miners (AEM)",
+    example: "true",
+    validValues: ["true", "false"]
+  },
+  VALIDATE_HARDWARE_NODES: {
+    required: false,
+    description: "Enable credential/MAC validation for Decentralization Nodes (CN, SDN, RDN, SVN)",
+    example: "true",
+    validValues: ["true", "false"]
+  },
+  VALIDATE_HARDWARE_MINERS: {
+    required: false,
+    description: "Enable credential/MAC validation for Hardware Miners (BM, ISM, OSM, IDM, ODM)",
+    example: "true",
+    validValues: ["true", "false"]
+  },
+  VALIDATE_CREDENTIALS_RADIATION: {
+    required: false,
+    description: "Enable credential validation for Radiation Monitors (IRM) - API keys/tokens",
+    example: "true",
+    validValues: ["true", "false"]
+  },
+  VALIDATE_CREDENTIALS_ENERGY: {
+    required: false,
+    description: "Enable credential validation for Energy Monitors (EM) - API keys/tokens",
+    example: "true",
+    validValues: ["true", "false"]
+  },
+  VALIDATE_CREDENTIALS_AIR: {
+    required: false,
+    description: "Enable credential validation for Air Quality Monitors (IHAQM, ILAQM, OMAQM, IMAQM, OHAQM) - API keys/tokens",
+    example: "true",
+    validValues: ["true", "false"]
+  },
+  VALIDATE_CREDENTIALS_WEATHER: {
+    required: false,
+    description: "Enable credential validation for Weather Monitors (HWM, LWM) - API keys/tokens",
+    example: "true",
+    validValues: ["true", "false"]
+  },
+  VALIDATE_CREDENTIALS_WATER: {
+    required: false,
+    description: "Enable credential validation for Water Quality Monitors (OLWQM, OHWQM) - API keys/tokens",
+    example: "true",
+    validValues: ["true", "false"]
+  },
+  
   REWARD_REPORT_DIR: {
     required: false,
     description: "Filesystem directory for hourly reward CSV exports",

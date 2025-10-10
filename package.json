@@ -31,7 +31,13 @@
     "backfill-claimed-at": "tsc && node dist/scripts/backfill-claimed-at.js",
     "backfill-claimed-at:dry": "tsc && node dist/scripts/backfill-claimed-at.js --dry-run",
     "dedupe-accruing": "tsc && node dist/scripts/dedupe-accruing.js",
-    "dedupe-accruing:dry": "tsc && node dist/scripts/dedupe-accruing.js --dry-run"
+    "dedupe-accruing:dry": "tsc && node dist/scripts/dedupe-accruing.js --dry-run",
+    "exceptions": "tsc && node dist/scripts/manage-exceptions.js",
+    "exceptions:test": "TEST_MODE=true tsc && node dist/scripts/manage-exceptions.js",
+    "migrate-all:dry": "tsc && node dist/scripts/migrate-all.js",
+    "migrate-all:execute": "tsc && node dist/scripts/migrate-all.js --execute",
+    "migrate-all:validate": "tsc && node dist/scripts/migrate-all.js --validate",
+    "grant-recent-rewards": "tsc && node dist/scripts/grant-recent-rewards.js"
   },
   "dependencies": {
     "algosdk": "^1.24.0",

@@ -975,6 +975,24 @@ export async function startRewardSystem(): Promise<void> {
   // Validate environment before starting
   printEnvironmentStatus();
   
+  // Log hardware validation configuration
+  const getValidationStatus = (envVar: string | undefined): string => {
+    if (!envVar) return 'ENABLED (default)';
+    return envVar.toLowerCase() === 'false' ? 'DISABLED' : 'ENABLED';
+  };
+  
+  logSection(
+    '🔐 Hardware Validation Status:',
+    `  - AEM Devices: ${getValidationStatus(process.env.VALIDATE_HARDWARE_AEM)}`,
+    `  - Node Devices (CN/SDN/RDN/SVN): ${getValidationStatus(process.env.VALIDATE_HARDWARE_NODES)}`,
+    `  - Hardware Miners (BM/ISM/OSM/IDM/ODM): ${getValidationStatus(process.env.VALIDATE_HARDWARE_MINERS)}`,
+    `  - Radiation Sensors (IRM): ${getValidationStatus(process.env.VALIDATE_CREDENTIALS_RADIATION)} [future]`,
+    `  - Energy Monitors (EM): ${getValidationStatus(process.env.VALIDATE_CREDENTIALS_ENERGY)} [future]`,
+    `  - Air Quality (IHAQM, etc.): ${getValidationStatus(process.env.VALIDATE_CREDENTIALS_AIR)} [future]`,
+    `  - Weather Monitors (HWM/LWM): ${getValidationStatus(process.env.VALIDATE_CREDENTIALS_WEATHER)} [future]`,
+    `  - Water Quality (OLWQM/OHWQM): ${getValidationStatus(process.env.VALIDATE_CREDENTIALS_WATER)} [future]`
+  );
+  
   logSection(
     `Reward system starting with hourly processing...`,
     `System will process devices every hour at minute 15`,

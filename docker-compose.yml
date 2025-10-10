@@ -10,27 +10,40 @@ services:
       CREDS_MONGO_URI: op://dbRewards/CREDS_MONGO_URI/password
       DISCORD_WEBHOOK_URL: op://dbRewards/DISCORD_WEBHOOK_URL/password
       # Static configuration
+      CREDS_HARDWARE_COLLECTION: "hardware"
+      CREDS_DB_NAME: "creds"
+      VALIDATE_HARDWARE_AEM: "false"
+      VALIDATE_HARDWARE_NODES: "false"
+      VALIDATE_HARDWARE_MINERS: "false"
+      VALIDATE_CREDENTIALS_RADIATION: "false"
+      VALIDATE_CREDENTIALS_ENERGY: "false"
+      VALIDATE_CREDENTIALS_AIR: "false"
+      VALIDATE_CREDENTIALS_WATER: "false"
+      VALIDATE_CREDENTIALS_WEATHER: "false"
       NODE_ENV: production
-      WEEKLY_REWARDS_ENABLED: true
-      NEXT_PUBLIC_WEEKLY_REWARDS_ENABLED: true
-      SIMULATION_ENABLED: false
-      TEST_MODE: false
-      DEBUG: false
-      ALERTS_ENABLED: true
+      WEEKLY_REWARDS_ENABLED: "true"
+      NEXT_PUBLIC_WEEKLY_REWARDS_ENABLED: "true"
+      WEEKLY_CUTOFF_UTC: "2025-09-12T00:00:00.00Z"
+      SIMULATION_ENABLED: "false"
+      TEST_MODE: "false"
+      DEBUG: "false"
+      ALERTS_ENABLED: "true"
       DASHBOARD_PORT: 30033
       ALERT_MAX_FAILURE_RATE: 20
       ALERT_MAX_PROCESSING_TIME: 45
       ALERT_MAX_SLOW_QUERY_RATE: 15
       ALERT_MAX_ERROR_RATE: 5
-      MATURATION_ENABLED: true
-      RUN_DAILY_MATURATION_ONCE: false
-      DAILY_MATURATION_ONCE_TIMEBASE: real
+      MATURATION_ENABLED: "true"
+      RUN_DAILY_MATURATION_ONCE: "false"
+      DAILY_MATURATION_ONCE_TIMEBASE: "real"
       ADMIN_ALLOWED_IPS:
-      ADMIN_ENDPOINTS_ENABLED: false
+      ADMIN_ENDPOINTS_ENABLED: "false"
+      REWARD_REPORT_DIR: /home/debfrynetadm/projects/dbRewards/reward-reports
     volumes:
       - ./logs:/app/logs
       - ./backups:/app/backups
       - /var/run/docker.sock:/var/run/docker.sock:ro
+      - /home/debfrynetadm/projects/dbRewards/reward-reports:/home/debfrynetadm/projects/dbRewards/reward-reports
     ports:
       - "30033:30033"  # Web dashboard
     networks:
@@ -58,26 +71,40 @@ services:
       # 1Password secrets injection
       OP_SERVICE_ACCOUNT_TOKEN: ${OP_SERVICE_ACCOUNT_TOKEN?missing_OP_SERVICE_ACCOUNT_TOKEN}
       MONGO_URI: op://dbRewards/MONGO_URI/password
+      #use /dbRewards/VER_MONGO_URI/password for testing DB Project
       CREDS_MONGO_URI: op://dbRewards/CREDS_MONGO_URI/password
       DISCORD_WEBHOOK_URL: op://dbRewards/DISCORD_WEBHOOK_URL/password
       # Simulation mode configuration
+      CREDS_HARDWARE_COLLECTION: "hardware"
+      CREDS_DB_NAME: "creds"
+      VALIDATE_HARDWARE_AEM: "false"
+      VALIDATE_HARDWARE_NODES: "false"
+      VALIDATE_HARDWARE_MINERS: "false"
+      VALIDATE_CREDENTIALS_RADIATION: "false"
+      VALIDATE_CREDENTIALS_ENERGY: "false"
+      VALIDATE_CREDENTIALS_AIR: "false"
+      VALIDATE_CREDENTIALS_WATER: "false"
+      VALIDATE_CREDENTIALS_WEATHER: "false"
+      WEEKLY_CUTOFF_UTC: "2025-09-12T00:00:00.00Z"      
       NODE_ENV: development
-      WEEKLY_REWARDS_ENABLED: true
-      SIMULATION_ENABLED: true
-      NEXT_PUBLIC_WEEKLY_REWARDS_ENABLED: true
-      TIME_ACCEL: 8
-      SIM_START_AT: "2025-09-28T23:00:00Z"
-      TEST_MODE: false
-      DEBUG: false
-      ALERTS_ENABLED: false
+      WEEKLY_REWARDS_ENABLED: "true"
+      NEXT_PUBLIC_WEEKLY_REWARDS_ENABLED: "true"
+      SIMULATION_ENABLED: "true"
+      TEST_MODE: "false"
+      DEBUG: "false"
+      TIME_ACCEL: 24
+      SIM_START_AT: "2025-10-02T05:00:00Z"
+      ALERTS_ENABLED: "false"
       DASHBOARD_PORT: 30032
-      MATURATION_ENABLED: true
-      RUN_DAILY_MATURATION_ONCE: false
-      DAILY_MATURATION_ONCE_TIMEBASE: real
-      DAILY_MATURATION_ENABLED: false
-      WEEKLY_MATURATION_ENABLED: false
+      MATURATION_ENABLED: "true"
+      RUN_DAILY_MATURATION_ONCE: "true"
+      DAILY_MATURATION_ONCE_TIMEBASE: "real"
+      DAILY_MATURATION_ENABLED: "false"
+      WEEKLY_MATURATION_ENABLED: "false"
+      REWARD_REPORT_DIR: /home/debfrynetadm/projects/dbRewards/reward-reports
     volumes:
-      - ./logs:/app/logs
+      - /home/debfrynetadm/projects/dbRewards/logs:/app/logs
+      - /home/debfrynetadm/projects/dbRewards/reward-reports:/home/debfrynetadm/projects/dbRewards/reward-reports
     ports:
       - "30032:30032"  # Web dashboard for simulation
     networks:

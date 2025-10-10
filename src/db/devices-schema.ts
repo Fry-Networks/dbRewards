@@ -64,6 +64,24 @@ export const devicesSchema = new mongoose.Schema({
       type: String,
     },
   },
+  rewards_exception: {
+    enabled: {
+      type: Boolean,
+      default: false,
+    },
+    reason: {
+      type: String,
+    },
+    added_by: {
+      type: String,
+    },
+    added_at: {
+      type: Date,
+    },
+    expires_at: {
+      type: Date,
+    },
+  },
 });
 
 export interface Device extends mongoose.Document {
@@ -95,6 +113,13 @@ export interface Device extends mongoose.Document {
     amount: number;
     txId: string;
     time: Date;
+  };
+  rewards_exception?: {
+    enabled: boolean;
+    reason?: string;
+    added_by?: string;
+    added_at?: Date;
+    expires_at?: Date;
   };
 }
 

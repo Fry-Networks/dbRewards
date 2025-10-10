@@ -121,22 +121,28 @@ async function main(): Promise<void> {
     const firstRewardDate = dailyRewards[0]?.created_at ?? existing?.first_reward_date ?? new Date();
     const lastRewardDate = dailyRewards[dailyRewards.length - 1]?.created_at ?? existing?.last_reward_date ?? new Date();
 
+    const setPayload: Record<string, unknown> = {
+      miner_key: minerKey,
+      daily_rewards: dailyRewards,
+      weekly_rewards: weeklyRewards,
+      total_pending: totalPending,
+      total_claimable: totalClaimable,
+      reward_count: dailyRewards.length,
+      weekly_reward_count: weeklyRewards.length,
+      first_reward_date: firstRewardDate,
+      last_reward_date: lastRewardDate,
+      last_updated: new Date(),
+    };
+
+    if (existing) {
+      const totalClaimed = typeof existing.total_claimed === 'number' ? existing.total_claimed : 0;
+      setPayload.total_claimed = totalClaimed;
+    }
+
     const result = await DeviceRewardModel.findOneAndUpdate(
       { miner_key: minerKey },
       {
-        $set: {
-          miner_key: minerKey,
-          daily_rewards: dailyRewards,
-          weekly_rewards: weeklyRewards,
-          total_pending: totalPending,
-          total_claimable: totalClaimable,
-          total_claimed: existing?.total_claimed ?? 0,
-          reward_count: dailyRewards.length,
-          weekly_reward_count: weeklyRewards.length,
-          first_reward_date: firstRewardDate,
-          last_reward_date: lastRewardDate,
-          last_updated: new Date(),
-        },
+        $set: setPayload,
         $setOnInsert: {
           total_claimed: 0,
         },

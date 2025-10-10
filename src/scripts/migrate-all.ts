@@ -14,8 +14,8 @@ type DatabaseGroup = 'main' | 'creds';
 
 type CollectionKey =
   | 'registration-users'
-  | 'byod'
-  | 'fry-conversion'
+  | 'byods'
+  | 'fry-conversions'
   | 'users'
   | 'devices'
   | 'hardware'
@@ -35,17 +35,17 @@ const COLLECTIONS: Record<CollectionKey, CollectionConfig> = {
     db: 'main',
     collection: 'registration-users',
   },
-  byod: {
-    key: 'byod',
+  byods: {
+    key: 'byods',
     label: 'BYOD',
     db: 'main',
-    collection: 'byod',
+    collection: 'byods',
   },
-  'fry-conversion': {
-    key: 'fry-conversion',
-    label: 'Fry Conversion',
+  'fry-conversions': {
+    key: 'fry-conversions',
+    label: 'Fry Conversions',
     db: 'main',
-    collection: 'fry-conversion',
+    collection: 'fry-conversions',
   },
   users: {
     key: 'users',
@@ -75,8 +75,8 @@ const COLLECTIONS: Record<CollectionKey, CollectionConfig> = {
 
 const DEFAULT_COLLECTION_ORDER: CollectionKey[] = [
   'registration-users',
-  'byod',
-  'fry-conversion',
+  'byods',
+  'fry-conversions',
   'users',
   'devices',
   'hardware',

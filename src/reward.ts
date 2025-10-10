@@ -1,3 +1,57 @@
+/**
+ * HARDWARE VALIDATION SYSTEM - GRADUAL ROLLOUT
+ * 
+ * This module implements a granular hardware credential validation system for reward processing.
+ * Validation can be enabled/disabled per device category using environment variables.
+ * 
+ * VALIDATION GROUPS:
+ * 
+ * 1. AI Edge Miners (AEM)
+ *    - Environment Variable: VALIDATE_HARDWARE_AEM
+ *    - Device Types: AEM
+ *    - Validation: MAC address + hardware credentials
+ * 
+ * 2. Decentralization Nodes
+ *    - Environment Variable: VALIDATE_HARDWARE_NODES
+ *    - Device Types: CN, SDN, RDN, SVN
+ *    - Validation: MAC address + hardware credentials
+ * 
+ * 3. Hardware Miners
+ *    - Environment Variable: VALIDATE_HARDWARE_MINERS
+ *    - Device Types: BM, ISM, OSM, IDM, ODM
+ *    - Validation: MAC address + hardware credentials
+ * 
+ * FUTURE SENSOR VALIDATION (API Keys/Tokens):
+ *    - VALIDATE_CREDENTIALS_RADIATION (IRM)
+ *    - VALIDATE_CREDENTIALS_ENERGY (EM)
+ *    - VALIDATE_CREDENTIALS_AIR (IHAQM, ILAQM, OMAQM, IMAQM, OHAQM)
+ *    - VALIDATE_CREDENTIALS_WEATHER (HWM, LWM)
+ *    - VALIDATE_CREDENTIALS_WATER (OLWQM, OHWQM)
+ * 
+ * ROLLOUT STRATEGY:
+ * 
+ * Week 1 - Test AEM devices:
+ *   VALIDATE_HARDWARE_AEM=true
+ *   VALIDATE_HARDWARE_NODES=false
+ *   VALIDATE_HARDWARE_MINERS=false
+ * 
+ * Week 2 - Add Node devices:
+ *   VALIDATE_HARDWARE_AEM=true
+ *   VALIDATE_HARDWARE_NODES=true
+ *   VALIDATE_HARDWARE_MINERS=false
+ * 
+ * Week 3+ - Full rollout:
+ *   VALIDATE_HARDWARE_AEM=true
+ *   VALIDATE_HARDWARE_NODES=true
+ *   VALIDATE_HARDWARE_MINERS=true
+ * 
+ * BEHAVIOR:
+ * - When validation is ENABLED (true): Devices without valid credentials are BLOCKED from rewards
+ * - When validation is DISABLED (false): Credential checks are SKIPPED, devices can be rewarded
+ * - All variables default to 'true' for security-first approach
+ * - Quick rollback available by setting any variable to 'false'
+ */
+
 import { Device } from "./db/devices-schema";
 import "dotenv/config";
 import { Product } from "./db/products-schema";
@@ -33,6 +87,7 @@ const minerType = {
 type MinerCategory = keyof typeof minerType;
 type MinerType = (typeof minerType)[MinerCategory][number];
 
+// Device type groupings for hardware validation
 const MAC_REQUIRED_PREFIXES = new Set<string>([
   'SDN',
   'SVN',
@@ -45,6 +100,18 @@ const MAC_REQUIRED_PREFIXES = new Set<string>([
   'IDM',
   'ODM',
 ]);
+
+// Granular validation control groups
+const AEM_DEVICES = new Set<string>(['AEM']);
+const NODE_DEVICES = new Set<string>(['CN', 'SDN', 'RDN', 'SVN']);
+const MINER_DEVICES = new Set<string>(['BM', 'ISM', 'OSM', 'IDM', 'ODM']);
+
+// Future credential validation groups (API keys/tokens, etc.)
+const RADIATION_DEVICES = new Set<string>(['IRM']);
+const ENERGY_DEVICES = new Set<string>(['EM']);
+const AIR_DEVICES = new Set<string>(['IHAQM', 'ILAQM', 'OMAQM', 'IMAQM', 'OHAQM']);
+const WEATHER_DEVICES = new Set<string>(['HWM', 'LWM']);
+const WATER_DEVICES = new Set<string>(['OLWQM', 'OHWQM']);
 
 /**
  * Check if a string exists in any miner type category.
@@ -59,6 +126,63 @@ function isValidMinerType(minerKey: string): minerKey is MinerType {
 function requiresHardwareMac(minerKey: string): boolean {
   const prefix = minerKey.split('-')[0];
   return MAC_REQUIRED_PREFIXES.has(prefix);
+}
+
+/**
+ * Check if hardware validation is enabled for a specific device type.
+ * Uses granular environment variables to control validation rollout.
+ * Case-insensitive comparison to handle Docker Compose boolean capitalization.
+ * @param minerKey - The miner key (e.g., "AEM-12345", "SDN-67890")
+ * @returns true if validation is enabled for this device type, false otherwise
+ */
+function isHardwareValidationEnabled(minerKey: string): boolean {
+  const prefix = minerKey.split('-')[0];
+  
+  // Helper function for case-insensitive boolean check
+  const isFalse = (value: string | undefined): boolean => {
+    return value?.toLowerCase() === 'false';
+  };
+  
+  // Check AEM devices
+  if (AEM_DEVICES.has(prefix)) {
+    return !isFalse(process.env.VALIDATE_HARDWARE_AEM);
+  }
+  
+  // Check Node devices (CN, SDN, RDN, SVN)
+  if (NODE_DEVICES.has(prefix)) {
+    return !isFalse(process.env.VALIDATE_HARDWARE_NODES);
+  }
+  
+  // Check Miner devices (BM, ISM, OSM, IDM, ODM)
+  if (MINER_DEVICES.has(prefix)) {
+    return !isFalse(process.env.VALIDATE_HARDWARE_MINERS);
+  }
+  
+  // Future: Check sensor credential validation groups
+  // These will use different validation logic (API keys/tokens instead of MAC addresses)
+  // For now, return false as these are not yet implemented
+  if (RADIATION_DEVICES.has(prefix)) {
+    return !isFalse(process.env.VALIDATE_CREDENTIALS_RADIATION);
+  }
+  
+  if (ENERGY_DEVICES.has(prefix)) {
+    return !isFalse(process.env.VALIDATE_CREDENTIALS_ENERGY);
+  }
+  
+  if (AIR_DEVICES.has(prefix)) {
+    return !isFalse(process.env.VALIDATE_CREDENTIALS_AIR);
+  }
+  
+  if (WEATHER_DEVICES.has(prefix)) {
+    return !isFalse(process.env.VALIDATE_CREDENTIALS_WEATHER);
+  }
+  
+  if (WATER_DEVICES.has(prefix)) {
+    return !isFalse(process.env.VALIDATE_CREDENTIALS_WATER);
+  }
+  
+  // Default to true (enabled) for unknown device types - fail secure
+  return true;
 }
 
 interface ReturnDevice {
@@ -1037,27 +1161,79 @@ export const doRewards = async (
           return { device, err: "Product not found" };
         }
 
+        // Hardware validation with granular control
         if (requiresHardwareMac(device.miner_key)) {
-          try {
-            let hardwareCredential = hardwareCache.get(device.miner_key);
-            if (hardwareCredential === undefined) {
-              hardwareCredential = await getHardwareCredential(device.miner_key);
-              hardwareCache.set(device.miner_key, hardwareCredential);
-            }
+          // Check if device has an active exception
+          if (device.rewards_exception?.enabled) {
+            const now = new Date();
+            const isExpired = device.rewards_exception.expires_at && device.rewards_exception.expires_at < now;
+            
+            if (!isExpired) {
+              // Active exception - bypass validation
+              DEBUG && console.log(
+                `Hardware validation BYPASSED for ${device.miner_key} ` +
+                `(Exception: ${device.rewards_exception.reason || 'N/A'}, Added by: ${device.rewards_exception.added_by || 'N/A'})`
+              );
+            } else {
+              // Exception expired - perform normal validation
+              DEBUG && console.log(`Exception EXPIRED for ${device.miner_key} - performing validation`);
+              
+              // Check if validation is enabled for this device type
+              if (isHardwareValidationEnabled(device.miner_key)) {
+                try {
+                  let hardwareCredential = hardwareCache.get(device.miner_key);
+                  if (hardwareCredential === undefined) {
+                    hardwareCredential = await getHardwareCredential(device.miner_key);
+                    hardwareCache.set(device.miner_key, hardwareCredential);
+                  }
 
-            if (!hardwareCredential || !hardwareCredential.device_id) {
-              DEBUG && console.log(`Missing hardware MAC for miner ${device.miner_key}`);
-              return { device, err: "Hardware MAC missing" };
-            }
+                  if (!hardwareCredential || !hardwareCredential.device_id) {
+                    DEBUG && console.log(`Missing hardware MAC for miner ${device.miner_key}`);
+                    return { device, err: "Hardware MAC missing" };
+                  }
 
-            const macAssessment = validateMacAddress(hardwareCredential.device_id);
-            if (!macAssessment.valid) {
-              DEBUG && console.log(`Invalid hardware MAC for miner ${device.miner_key}: ${hardwareCredential.device_id} (${macAssessment.reason})`);
-              return { device, err: "Hardware MAC invalid" };
+                  const macAssessment = validateMacAddress(hardwareCredential.device_id);
+                  if (!macAssessment.valid) {
+                    DEBUG && console.log(`Invalid hardware MAC for miner ${device.miner_key}: ${hardwareCredential.device_id} (${macAssessment.reason})`);
+                    return { device, err: "Hardware MAC invalid" };
+                  }
+                } catch (error) {
+                  console.error(`Hardware credential lookup failed for ${device.miner_key}:`, error);
+                  return { device, err: "Hardware lookup failed" };
+                }
+              } else {
+                // Validation disabled for this device type - skip credential check
+                DEBUG && console.log(`Hardware validation disabled for ${device.miner_key} - skipping credential check`);
+              }
             }
-          } catch (error) {
-            console.error(`Hardware credential lookup failed for ${device.miner_key}:`, error);
-            return { device, err: "Hardware lookup failed" };
+          } else {
+            // No exception - check if validation is enabled for this device type
+            if (isHardwareValidationEnabled(device.miner_key)) {
+              try {
+                let hardwareCredential = hardwareCache.get(device.miner_key);
+                if (hardwareCredential === undefined) {
+                  hardwareCredential = await getHardwareCredential(device.miner_key);
+                  hardwareCache.set(device.miner_key, hardwareCredential);
+                }
+
+                if (!hardwareCredential || !hardwareCredential.device_id) {
+                  DEBUG && console.log(`Missing hardware MAC for miner ${device.miner_key}`);
+                  return { device, err: "Hardware MAC missing" };
+                }
+
+                const macAssessment = validateMacAddress(hardwareCredential.device_id);
+                if (!macAssessment.valid) {
+                  DEBUG && console.log(`Invalid hardware MAC for miner ${device.miner_key}: ${hardwareCredential.device_id} (${macAssessment.reason})`);
+                  return { device, err: "Hardware MAC invalid" };
+                }
+              } catch (error) {
+                console.error(`Hardware credential lookup failed for ${device.miner_key}:`, error);
+                return { device, err: "Hardware lookup failed" };
+              }
+            } else {
+              // Validation disabled for this device type - skip credential check
+              DEBUG && console.log(`Hardware validation disabled for ${device.miner_key} - skipping credential check`);
+            }
           }
         }
 
@@ -1264,7 +1440,8 @@ export const doRewards = async (
     `No reward wallet: ${noWallet}`,
     `Other validation errors: ${otherValidation}`,
     `DB/errors during bulk: ${dbErrors}`,
-    `Success rate (inserted / eligible): ${successRate}%`
+    `Success rate (inserted / eligible): ${successRate}%`,
+    '-----------------------------------'    
   );
 
   const summary: AccrualSummary = {

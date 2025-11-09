@@ -1,4 +1,5 @@
 import fs from 'fs/promises';
+import { constants as fsConstants } from 'fs';
 import path from 'path';
 import { getSimNow } from '../time-control';
 
@@ -27,7 +28,8 @@ export interface AuditLogSummary {
 }
 
 export class AuditLogger {
-  private readonly logDir = path.join(process.cwd(), '.logs', 'audit');
+  private readonly logDir = path.join(process.cwd(), 'logs', 'audit');
+  private readonly legacyLogDir = path.join(process.cwd(), '.logs', 'audit');
   private readonly maxLogFileSize = 10 * 1024 * 1024; // 10MB
   private readonly retentionDays = 90; // Keep logs for 90 days
   
@@ -39,8 +41,33 @@ export class AuditLogger {
   private async ensureLogDirectory(): Promise<void> {
     try {
       await fs.mkdir(this.logDir, { recursive: true });
+      await this.migrateLegacyLogs();
     } catch (error) {
       console.error('Failed to create audit log directory:', error);
+    }
+  }
+
+  private async migrateLegacyLogs(): Promise<void> {
+    try {
+      const legacyStats = await fs.stat(this.legacyLogDir);
+      if (!legacyStats.isDirectory()) return;
+
+      const files = await fs.readdir(this.legacyLogDir);
+      if (files.length === 0) return;
+
+      console.log(`📁 Migrating legacy audit logs from ${this.legacyLogDir} → ${this.logDir}`);
+      for (const file of files) {
+        const source = path.join(this.legacyLogDir, file);
+        const destination = path.join(this.logDir, file);
+        try {
+          await fs.access(destination, fsConstants.F_OK);
+          continue;
+        } catch {
+          await fs.rename(source, destination);
+        }
+      }
+    } catch {
+      // Ignore if no legacy audit logs exist.
     }
   }
 

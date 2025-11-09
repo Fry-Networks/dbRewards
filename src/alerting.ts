@@ -25,6 +25,7 @@ class AlertingSystem {
   private config: AlertConfig;
   private lastAlerts: Map<string, Date> = new Map();
   private alertCooldown = 15 * 60 * 1000; // 15 minutes cooldown
+  private minSlowQuerySample = parseInt(process.env.ALERT_MIN_SLOW_QUERY_SAMPLE || '20', 10);
 
   constructor() {
     this.config = {
@@ -126,9 +127,11 @@ class AlertingSystem {
     }
 
     // Behind on hourly processing
-    const expectedRewards = Math.ceil(health.total_devices / 24) * (health.current_hour + 1);
-    const completionRate = health.todays_rewards / expectedRewards * 100;
-    if (completionRate < 80 && health.current_hour > 1) {
+    const expectedRewards = health.expected_rewards_by_now ?? (health.expected_hourly_devices * Math.max(health.hours_processed_today, 1));
+    const effectiveHours = health.effective_hours_for_expectations ?? health.hours_processed_today;
+    const laggingHours = Math.max(0, (health.hours_expected_so_far ?? 0) - health.hours_processed_today);
+    const completionRate = expectedRewards > 0 ? (health.todays_rewards / expectedRewards) * 100 : 100;
+    if (completionRate < 80 && effectiveHours > 0 && laggingHours >= 2) {
       alerts.push({
         level: 'WARNING',
         title: 'Behind on Processing',
@@ -140,7 +143,10 @@ class AlertingSystem {
 
     // High slow query rate
     const slowQueryRate = dbStats.totalQueries > 0 ? (dbStats.slowQueries / dbStats.totalQueries * 100) : 0;
-    if (slowQueryRate > this.config.criticalThresholds.maxSlowQueryRate) {
+    if (
+      dbStats.totalQueries >= this.minSlowQuerySample &&
+      slowQueryRate > this.config.criticalThresholds.maxSlowQueryRate
+    ) {
       alerts.push({
         level: 'WARNING',
         title: 'High Slow Query Rate',
@@ -229,15 +235,34 @@ class AlertingSystem {
     }
   }
 
+  // Convenience hook for subsystems that need to push structured alerts (optionally forcing delivery)
+  async emit(
+    level: Alert['level'],
+    title: string,
+    message: string,
+    data?: Record<string, unknown> | unknown,
+    options?: { force?: boolean },
+  ): Promise<void> {
+    if (!this.config.enabled && !options?.force) {
+      return;
+    }
+    await this.sendAlert({
+      level,
+      title,
+      message,
+      timestamp: new Date(),
+      data,
+    });
+  }
+
   // Method to manually trigger an alert (for testing)
   async sendTestAlert(): Promise<void> {
-    await this.sendAlert({
-      level: 'INFO',
-      title: 'Test Alert',
-      message: 'This is a test alert from the dbRewards monitoring system',
-      timestamp: new Date(),
-      data: { test: true }
-    });
+    await this.emit(
+      'INFO',
+      'Test Alert',
+      'This is a test alert from the dbRewards monitoring system',
+      { test: true },
+    );
   }
 
   // Get alerting configuration status

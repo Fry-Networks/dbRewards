@@ -1,3 +1,33 @@
+/**
+ * Device + reward migration utility between Mongo clusters.
+ *
+ * Core behaviour:
+ *   • Copies documents from SOURCE_MONGO_URI → DEST_MONGO_URI (both must point at the `main` DB).
+ *   • By default migrates both the `devices` and `rewards` collections, inserting new docs and
+ *     optionally updating existing ones that were created after a threshold date.
+ *   • Can optionally bypass Mongoose and bulk-copy raw documents for exact replication.
+ *
+ * Typical commands (after `tsc` or via package scripts):
+ *   npm run migrate-devices -- --threshold=2025-07-15       # live run, devices+rewards, update only recent
+ *   npm run migrate-devices:dry-run -- --only=devices       # validate device docs without writing
+ *   npm run migrate-devices -- --raw-devices --only=devices # raw upsert of devices collection
+ *
+ * CLI flags:
+ *   --dry-run            Validate documents and report counts without writing.
+ *   --only=devices|rewards|devices,rewards
+ *                        Limit which collections run; `--include=` is accepted synonym.
+ *   --force-update       Update destination documents regardless of creation date.
+ *   --threshold=ISO_DATE (alias: --since=)
+ *                        Only update destination devices whose existing `created_at` is >= threshold.
+ *                        Default is 2025-07-01T00:00:00Z.
+ *   --raw-devices / --raw
+ *                        Copy devices using raw Mongo bulk upserts (bypasses schema validation).
+ *
+ * Required environment variables:
+ *   SOURCE_MONGO_URI   Mongo connection string for the source cluster (uses database `main`).
+ *   DEST_MONGO_URI     Mongo connection string for the destination cluster (uses database `main`).
+ */
+
 import mongoose from 'mongoose';
 import 'dotenv/config';
 import { DeviceModel } from '../db/devices-schema';

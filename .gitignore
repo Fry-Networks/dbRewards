@@ -12,3 +12,10 @@ op.sh
 config.json
 .tokens/admin-tokens.json
 reward-reports
+logs/
+backups/
+.backups/
+build.sh
+update-stake-amounts.js
+src/scripts/copy-products.ts
+src/scripts/grant-recent-rewards.ts

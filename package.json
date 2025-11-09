@@ -32,12 +32,22 @@
     "backfill-claimed-at:dry": "tsc && node dist/scripts/backfill-claimed-at.js --dry-run",
     "dedupe-accruing": "tsc && node dist/scripts/dedupe-accruing.js",
     "dedupe-accruing:dry": "tsc && node dist/scripts/dedupe-accruing.js --dry-run",
+    "dedupe-weekly": "tsc && node dist/scripts/dedupe-weekly.js",
+    "dedupe-weekly:dry": "tsc && node dist/scripts/dedupe-weekly.js --dry-run",
     "exceptions": "tsc && node dist/scripts/manage-exceptions.js",
     "exceptions:test": "TEST_MODE=true tsc && node dist/scripts/manage-exceptions.js",
+    "migrate-device-rewards": "tsc && node dist/scripts/migrate-device-rewards.js",
+    "migrate-device-rewards:dry-run": "tsc && node dist/scripts/migrate-device-rewards.js --dry-run",
+    "inspect-device-rewards": "tsc && node dist/scripts/inspect-device-rewards.js",
+    "migrate-device-rewards:prefix": "tsc && node dist/scripts/migrate-device-rewards.js --prefix",
     "migrate-all:dry": "tsc && node dist/scripts/migrate-all.js",
     "migrate-all:execute": "tsc && node dist/scripts/migrate-all.js --execute",
     "migrate-all:validate": "tsc && node dist/scripts/migrate-all.js --validate",
-    "grant-recent-rewards": "tsc && node dist/scripts/grant-recent-rewards.js"
+    "grant-recent-rewards": "tsc && node dist/scripts/grant-recent-rewards.js",
+    "convert-legacy-fry": "tsc && node dist/scripts/convert-legacy-fry.js",
+    "copy-products": "tsc && node dist/scripts/copy-products.js",
+    "verify-conversion": "tsc && node dist/scripts/verify-conversion.js",
+    "weekly-jobs": "tsc && node dist/scripts/run-weekly-jobs.js"
   },
   "dependencies": {
     "algosdk": "^1.24.0",

@@ -1,8 +1,32 @@
-// Copies MongoDB collections between clusters with dry-run/execute/validate modes.
-// Usage examples:
-//   npm run migrate-all:dry -- --collections all
-//   npm run migrate-all:execute -- --collections users,devices
-//   npm run migrate-all:validate
+/**
+ * Cross-cluster collection migrator with dry-run, execute, and validate modes.
+ *
+ * What it does:
+ *   • Compares or copies selected collections between two clusters (source → destination).
+ *   • Supports summary-only dry runs, bulk upsert executions, and post-copy validation.
+ *   • Handles both the `main` and `creds` databases in one pass.
+ *
+ * Environment:
+ *   SRC_MONGO_URI   Source Mongo connection string.
+ *   DST_MONGO_URI   Destination Mongo connection string.
+ *   SRC_DB_MAIN     (optional, default "main") database name for main data on source.
+ *   DST_DB_MAIN     (optional, default "main") database name for main data on destination.
+ *   SRC_DB_CREDS    (optional, default "creds") database name for creds data on source.
+ *   DST_DB_CREDS    (optional, default "creds") database name for creds data on destination.
+ *
+ * Typical commands (see package.json scripts):
+ *   npm run migrate-all:dry -- --collections all
+ *   npm run migrate-all:execute -- --collections users,devices
+ *   npm run migrate-all:validate -- --collections hardware
+ *
+ * CLI flags:
+ *   --dry-run        (default) summarise differences without writing.
+ *   --execute        perform bulk upserts into destination.
+ *   --validate       compare hashes/counts to confirm parity (no writes).
+ *   --collections=LIST
+ *                    comma separated subset, e.g. users,devices (use "all" for defaults).
+ *   --help|-h        print detailed usage.
+ */
 import 'dotenv/config';
 import { createHash } from 'node:crypto';
 import type { Collection, Db, Document as MongoDocument, ObjectId, Filter } from 'mongodb';

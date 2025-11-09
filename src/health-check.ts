@@ -14,7 +14,10 @@ interface HealthStatus {
   claimable_rewards: number;
   expected_hourly_devices: number;
   current_hour: number;
+  hours_expected_so_far: number;
   hours_processed_today: number;
+  effective_hours_for_expectations: number;
+  expected_rewards_by_now: number;
   system_status: string;
   issues: string[];
 }
@@ -79,9 +82,12 @@ async function healthCheck(): Promise<HealthStatus> {
     const issues: string[] = [];
     
     // Check if we're behind on hourly processing
-    const expectedRewardsToday = expectedHourlyDevices * hoursExpectedSoFar;
-    if (expectedRewardsToday > 0 && todayRewards < expectedRewardsToday * 0.8) {
-      issues.push(`Behind on daily processing: ${todayRewards}/${expectedRewardsToday} expected rewards`);
+    const effectiveHours = Math.max(hoursProcessedToday, Math.min(hoursExpectedSoFar, hoursProcessedToday + 1));
+    const expectedRewardsToday = expectedHourlyDevices * Math.max(effectiveHours, 1);
+    const laggingHours = Math.max(0, hoursExpectedSoFar - hoursProcessedToday);
+    const behindOnRewards = effectiveHours > 0 && todayRewards < expectedRewardsToday * 0.8;
+    if (behindOnRewards && laggingHours >= 2) {
+      issues.push(`Behind on daily processing: ${todayRewards}/${expectedRewardsToday} expected rewards (${laggingHours} hour lag)`);
     }
     
     // Check if any hour is completely missing
@@ -145,7 +151,10 @@ async function healthCheck(): Promise<HealthStatus> {
       claimable_rewards: claimableRewards,
       expected_hourly_devices: expectedHourlyDevices,
       current_hour: currentHour,
+      hours_expected_so_far: hoursExpectedSoFar,
       hours_processed_today: hoursProcessedToday,
+      effective_hours_for_expectations: effectiveHours,
+      expected_rewards_by_now: expectedRewardsToday,
       system_status: systemStatus,
       issues: issues
     };
@@ -160,7 +169,10 @@ async function healthCheck(): Promise<HealthStatus> {
       claimable_rewards: 0,
       expected_hourly_devices: 0,
       current_hour: 0,
+      hours_expected_so_far: 0,
       hours_processed_today: 0,
+      effective_hours_for_expectations: 0,
+      expected_rewards_by_now: 0,
       system_status: 'ERROR',
       issues: [`Health check failed: ${error}`]
     };

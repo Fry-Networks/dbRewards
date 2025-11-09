@@ -1,9 +1,11 @@
 import fs from 'fs/promises';
+import { constants as fsConstants } from 'fs';
 import path from 'path';
 import { getSimNow } from '../time-control';
 import { DeviceRewardModel, TestDeviceRewardModel } from '../db/device-rewards-schema';
 import { DeviceModel, TestDeviceModel } from '../db/devices-schema';
 import { ProductModel } from '../db/products-schema';
+import { withJobLock } from '../scheduler/job-lock';
 
 interface BackupMetadata {
   timestamp: Date;
@@ -14,11 +16,16 @@ interface BackupMetadata {
 }
 
 export class BackupManager {
-  private readonly backupDir = path.join(process.cwd(), '.backups', 'csv');
+  private readonly backupRoot: string;
+  private readonly backupDir: string;
+  private readonly legacyBackupDir: string;
   private readonly retentionDays = 7;
   private readonly testMode = process.env.TEST_MODE === 'true';
   
   constructor() {
+    this.backupRoot = path.join(process.cwd(), 'backups');
+    this.backupDir = path.join(this.backupRoot, 'csv');
+    this.legacyBackupDir = path.join(process.cwd(), '.backups', 'csv');
     this.ensureBackupDirectory();
     this.scheduleCleanup();
   }
@@ -26,8 +33,36 @@ export class BackupManager {
   private async ensureBackupDirectory(): Promise<void> {
     try {
       await fs.mkdir(this.backupDir, { recursive: true });
+      await this.migrateLegacyBackups();
     } catch (error) {
       console.error('Failed to create backup directory:', error);
+    }
+  }
+
+  private async migrateLegacyBackups(): Promise<void> {
+    try {
+      const legacyStats = await fs.stat(this.legacyBackupDir);
+      if (!legacyStats.isDirectory()) return;
+
+      const files = await fs.readdir(this.legacyBackupDir);
+      if (files.length === 0) return;
+
+      console.log(`📁 Migrating legacy backup files from ${this.legacyBackupDir} → ${this.backupDir}`);
+      await fs.mkdir(this.backupDir, { recursive: true });
+
+      for (const file of files) {
+        const source = path.join(this.legacyBackupDir, file);
+        const destination = path.join(this.backupDir, file);
+        try {
+          await fs.access(destination, fsConstants.F_OK);
+          // Destination already exists; skip to avoid overwriting.
+          continue;
+        } catch {
+          await fs.rename(source, destination);
+        }
+      }
+    } catch {
+      // Ignore if legacy directory does not exist.
     }
   }
 
@@ -74,68 +109,70 @@ export class BackupManager {
     metadata: BackupMetadata;
     error?: string;
   }> {
-    const now = getSimNow();
-    const backupFiles: string[] = [];
-    
-    try {
-      console.log('🔄 Starting daily CSV backup...');
+    return await withJobLock('daily-backup', ['weekly-rollup', 'hourly-processing'], async () => {
+      const now = getSimNow();
+      const backupFiles: string[] = [];
       
-      // Backup Device Rewards
-      const deviceRewardsFile = await this.backupDeviceRewards(now);
-      if (deviceRewardsFile) backupFiles.push(deviceRewardsFile);
-      
-      // Backup Devices
-      const devicesFile = await this.backupDevices(now);
-      if (devicesFile) backupFiles.push(devicesFile);
-      
-      // Backup Products
-      const productsFile = await this.backupProducts(now);
-      if (productsFile) backupFiles.push(productsFile);
-      
-      // Calculate total records and file sizes
-      let totalRecords = 0;
-      let totalSize = 0;
-      const hashes: string[] = [];
-      
-      for (const file of backupFiles) {
-        const stats = await fs.stat(file);
-        totalSize += stats.size;
+      try {
+        console.log('🔄 Starting daily CSV backup...');
         
-        const content = await fs.readFile(file, 'utf8');
-        const lines = content.split('\n').filter(line => line.trim());
-        totalRecords += Math.max(0, lines.length - 1); // Subtract header row
+        // Backup Device Rewards
+        const deviceRewardsFile = await this.backupDeviceRewards(now);
+        if (deviceRewardsFile) backupFiles.push(deviceRewardsFile);
         
-        const hash = await this.calculateFileHash(file);
-        hashes.push(hash);
+        // Backup Devices
+        const devicesFile = await this.backupDevices(now);
+        if (devicesFile) backupFiles.push(devicesFile);
+        
+        // Backup Products
+        const productsFile = await this.backupProducts(now);
+        if (productsFile) backupFiles.push(productsFile);
+        
+        // Calculate total records and file sizes
+        let totalRecords = 0;
+        let totalSize = 0;
+        const hashes: string[] = [];
+        
+        for (const file of backupFiles) {
+          const stats = await fs.stat(file);
+          totalSize += stats.size;
+          
+          const content = await fs.readFile(file, 'utf8');
+          const lines = content.split('\n').filter(line => line.trim());
+          totalRecords += Math.max(0, lines.length - 1); // Subtract header row
+          
+          const hash = await this.calculateFileHash(file);
+          hashes.push(hash);
+        }
+        
+        // Create metadata
+        const metadata: BackupMetadata = {
+          timestamp: now,
+          recordCount: totalRecords,
+          collections: ['device-rewards', 'devices', 'products'],
+          fileSize: totalSize,
+          integrity: hashes.join('-')
+        };
+        
+        await fs.writeFile(
+          this.getMetadataFileName(now), 
+          JSON.stringify(metadata, null, 2)
+        );
+        
+        console.log(`✅ Daily backup completed: ${totalRecords} records, ${Math.round(totalSize / 1024)}KB`);
+        
+        return { success: true, backupFiles, metadata };
+        
+      } catch (error) {
+        console.error('❌ Daily backup failed:', error);
+        return { 
+          success: false, 
+          backupFiles, 
+          metadata: {} as BackupMetadata, 
+          error: error instanceof Error ? error.message : 'Unknown error' 
+        };
       }
-      
-      // Create metadata
-      const metadata: BackupMetadata = {
-        timestamp: now,
-        recordCount: totalRecords,
-        collections: ['device-rewards', 'devices', 'products'],
-        fileSize: totalSize,
-        integrity: hashes.join('-')
-      };
-      
-      await fs.writeFile(
-        this.getMetadataFileName(now), 
-        JSON.stringify(metadata, null, 2)
-      );
-      
-      console.log(`✅ Daily backup completed: ${totalRecords} records, ${Math.round(totalSize / 1024)}KB`);
-      
-      return { success: true, backupFiles, metadata };
-      
-    } catch (error) {
-      console.error('❌ Daily backup failed:', error);
-      return { 
-        success: false, 
-        backupFiles, 
-        metadata: {} as BackupMetadata, 
-        error: error instanceof Error ? error.message : 'Unknown error' 
-      };
-    }
+    });
   }
 
   private async backupDeviceRewards(date: Date): Promise<string | null> {

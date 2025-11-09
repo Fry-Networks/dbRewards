@@ -2,6 +2,7 @@ import { getSimNow } from '../time-control';
 import { DeviceRewardModel, TestDeviceRewardModel } from '../db/device-rewards-schema';
 import { DeviceModel, TestDeviceModel } from '../db/devices-schema';
 import { auditLogger } from './audit-logger';
+import { withJobLock } from '../scheduler/job-lock';
 
 interface ValidationError {
   type: 'CRITICAL' | 'WARNING' | 'INFO';
@@ -34,7 +35,7 @@ export class DataValidator {
     
     try {
       const Model = this.testMode ? TestDeviceRewardModel : DeviceRewardModel;
-      const devices = await Model.find({});
+      const devices = await Model.find({}).lean();
       
       for (const device of devices) {
         // Validate total calculations
@@ -88,14 +89,12 @@ export class DataValidator {
     let expectedClaimable = 0;
     let expectedClaimed = 0;
     
-    // Daily rewards (only pending/claimable/claimed count toward totals in non-weekly mode)
-    if (!process.env.WEEKLY_REWARDS_ENABLED || process.env.WEEKLY_REWARDS_ENABLED !== 'true') {
-      device.daily_rewards?.forEach((reward: any) => {
-        if (reward.status === 'pending') expectedPending += reward.amount;
-        else if (reward.status === 'claimable') expectedClaimable += reward.amount;
-        else if (reward.status === 'claimed') expectedClaimed += reward.amount;
-      });
-    }
+    // Always include daily rewards in totals to support hybrid data states
+    device.daily_rewards?.forEach((reward: any) => {
+      if (reward.status === 'pending') expectedPending += reward.amount;
+      else if (reward.status === 'claimable') expectedClaimable += reward.amount;
+      else if (reward.status === 'claimed') expectedClaimed += reward.amount;
+    });
     
     // Weekly rewards (always count toward totals when they exist)
     device.weekly_rewards?.forEach((reward: any) => {
@@ -374,8 +373,8 @@ export class DataValidator {
       const DevModel = this.testMode ? TestDeviceModel : DeviceModel;
       
       // Get all device rewards
-      const deviceRewards = await RewardModel.find({});
-      const devices = await DevModel.find({ is_registered: true });
+      const deviceRewards = await RewardModel.find({}).lean();
+      const devices = await DevModel.find({ is_registered: true }).lean();
       
       // Check for orphaned device rewards
       const deviceKeys = new Set(devices.map((d: any) => d.miner_key));
@@ -452,32 +451,34 @@ export class DataValidator {
     deviceConsistency: ValidationSummary;
     overallHealth: 'HEALTHY' | 'WARNING' | 'CRITICAL';
   }> {
-    console.log('🔍 Starting full data validation suite...');
-    
-    const [deviceRewards, deviceConsistency] = await Promise.all([
-      this.validateDeviceRewards(),
-      this.validateDeviceConsistency()
-    ]);
-    
-    const totalCritical = deviceRewards.criticalCount + deviceConsistency.criticalCount;
-    const totalWarnings = deviceRewards.warningCount + deviceConsistency.warningCount;
-    
-    let overallHealth: 'HEALTHY' | 'WARNING' | 'CRITICAL';
-    if (totalCritical > 0) {
-      overallHealth = 'CRITICAL';
-    } else if (totalWarnings > 5) {
-      overallHealth = 'WARNING';
-    } else {
-      overallHealth = 'HEALTHY';
-    }
-    
-    console.log(`🏁 Full validation completed: ${overallHealth} (${totalCritical} critical, ${totalWarnings} warnings)`);
-    
-    return {
-      deviceRewards,
-      deviceConsistency,
-      overallHealth
-    };
+    return await withJobLock('data-validation', ['weekly-rollup', 'hourly-processing'], async () => {
+      console.log('🔍 Starting full data validation suite...');
+      
+      const [deviceRewards, deviceConsistency] = await Promise.all([
+        this.validateDeviceRewards(),
+        this.validateDeviceConsistency()
+      ]);
+      
+      const totalCritical = deviceRewards.criticalCount + deviceConsistency.criticalCount;
+      const totalWarnings = deviceRewards.warningCount + deviceConsistency.warningCount;
+      
+      let overallHealth: 'HEALTHY' | 'WARNING' | 'CRITICAL';
+      if (totalCritical > 0) {
+        overallHealth = 'CRITICAL';
+      } else if (totalWarnings > 5) {
+        overallHealth = 'WARNING';
+      } else {
+        overallHealth = 'HEALTHY';
+      }
+      
+      console.log(`🏁 Full validation completed: ${overallHealth} (${totalCritical} critical, ${totalWarnings} warnings)`);
+      
+      return {
+        deviceRewards,
+        deviceConsistency,
+        overallHealth
+      };
+    });
   }
 
   // Schedule periodic validation

@@ -1,4 +1,4 @@
-import mongoose from 'mongoose';
+import mongoose, { Types } from 'mongoose';
 
 // Sub-schema for individual daily rewards within a device document
 const dailyRewardSchema = new mongoose.Schema({
@@ -38,6 +38,18 @@ const weeklyRewardSchema = new mongoose.Schema({
 // Main schema for device rewards - one document per device containing all rewards
 export const deviceRewardsSchema = new mongoose.Schema({
   miner_key: { type: String, required: true, unique: true },  // Device identifier - unique index
+  legacy_fry_claimed: { type: Number, default: 0 },           // Snapshot of claimed Legacy Fry rewards
+  legacy_fry_pending: { type: Number, default: 0 },           // Snapshot of pending Legacy Fry rewards
+  legacy_fry_claimable: { type: Number, default: 0 },         // Snapshot of claimable Legacy Fry rewards
+  legacy_fry_aggregated: { type: Number, default: 0 },        // Snapshot of aggregated Legacy Fry rewards
+  legacy_fry_total: { type: Number, default: 0 },             // Total Legacy Fry ever accrued
+  legacy_fry_claimed_snapshot: { type: Number, default: 0 },  // Original claimed Legacy Fry prior to conversions
+  tfry_claimed: { type: Number, default: 0 },                 // Claimed tFry rewards
+  tfry_pending: { type: Number, default: 0 },                 // Pending tFry rewards
+  tfry_claimable: { type: Number, default: 0 },               // Claimable tFry rewards
+  tfry_aggregated: { type: Number, default: 0 },              // Aggregated tFry rewards
+  tfry_total: { type: Number, default: 0 },                   // Total tFry ever accrued
+  legacy_fry_claimed_converted: { type: Boolean, default: false }, // Future flag for claimed conversion
   total_pending: { type: Number, default: 0 },                // Sum of all pending rewards
   total_claimable: { type: Number, default: 0 },              // Sum of all claimable rewards
   total_claimed: { type: Number, default: 0 },                // Sum of all claimed rewards
@@ -58,10 +70,27 @@ deviceRewardsSchema.index({ 'daily_rewards.date': -1 });    // For date-based qu
 deviceRewardsSchema.index({ 'weekly_rewards.status': 1 });  // Weekly status queries
 deviceRewardsSchema.index({ 'weekly_rewards.unlock_at': -1 }); // Recent unlocks
 deviceRewardsSchema.index({ 'weekly_rewards.week_start': -1 }); // Weekly windows
+// Guard against duplicate weekly entries for the same device, asset, and unlock window
+deviceRewardsSchema.index(
+  { miner_key: 1, 'weekly_rewards.unlock_at': 1, 'weekly_rewards.asset_id': 1 },
+  { unique: true, sparse: true, name: 'unique_weekly_window_per_asset' },
+); // Prevent duplicate weekly entries for same window/asset
 
 // TypeScript interface for type safety
 export interface DeviceReward extends mongoose.Document {
   miner_key: string;
+  legacy_fry_claimed: number;
+  legacy_fry_pending: number;
+  legacy_fry_claimable: number;
+  legacy_fry_aggregated: number;
+  legacy_fry_total: number;
+  legacy_fry_claimed_snapshot: number;
+  tfry_claimed: number;
+  tfry_pending: number;
+  tfry_claimable: number;
+  tfry_aggregated: number;
+  tfry_total: number;
+  legacy_fry_claimed_converted?: boolean;
   total_pending: number;
   total_claimable: number;
   total_claimed: number;
@@ -74,6 +103,7 @@ export interface DeviceReward extends mongoose.Document {
     claimed_at?: Date;
     tx_id?: string;
     reward_number: number;
+    _id?: Types.ObjectId;
   }>;
   weekly_rewards: Array<{
     week_start: Date;
@@ -86,6 +116,7 @@ export interface DeviceReward extends mongoose.Document {
     claimed_at?: Date;
     tx_id?: string;
     reward_number: number;
+    _id?: Types.ObjectId;
   }>;
   last_updated: Date;
   reward_count: number;

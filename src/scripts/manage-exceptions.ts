@@ -1,12 +1,20 @@
 #!/usr/bin/env node
 /**
- * Interactive CLI tool for managing hardware validation exceptions
- * 
- * This tool allows administrators to:
- * - Add exceptions for devices that should bypass hardware validation
- * - Remove exceptions
- * - List all active exceptions
- * - Check exception status for a specific device
+ * Interactive CLI for managing hardware validation exceptions.
+ *
+ * Capabilities:
+ *   • Add an exception (sets `rewards_exception.enabled` with auditing metadata).
+ *   • Remove an exception.
+ *   • List all active/expired exceptions.
+ *   • Check the exception status for a specific miner key.
+ *
+ * Running:
+ *   npm run exceptions            # connect to production DB
+ *   npm run exceptions:test       # connect to test DB (sets TEST_MODE=true)
+ *
+ * Environment:
+ *   Uses the same connection settings as the application via `db/connect`.
+ *   Set TEST_MODE=true to target the test collections (`test-devices`).
  */
 
 import { connect } from "../db/connect";

@@ -20,8 +20,10 @@ services:
       VALIDATE_CREDENTIALS_AIR: "false"
       VALIDATE_CREDENTIALS_WATER: "false"
       VALIDATE_CREDENTIALS_WEATHER: "false"
-      NODE_ENV: production
+      NODE_ENV: "production"
+      NODE_OPTIONS: "--max-old-space-size=8192"
       WEEKLY_REWARDS_ENABLED: "true"
+      INLINE_WEEKLY_JOBS: "false"
       NEXT_PUBLIC_WEEKLY_REWARDS_ENABLED: "true"
       WEEKLY_CUTOFF_UTC: "2025-09-12T00:00:00.00Z"
       SIMULATION_ENABLED: "false"
@@ -34,6 +36,7 @@ services:
       ALERT_MAX_SLOW_QUERY_RATE: 15
       ALERT_MAX_ERROR_RATE: 5
       MATURATION_ENABLED: "true"
+      WEEKLY_MATURATION_ENABLED: "false"
       RUN_DAILY_MATURATION_ONCE: "false"
       DAILY_MATURATION_ONCE_TIMEBASE: "real"
       ADMIN_ALLOWED_IPS:
@@ -88,16 +91,17 @@ services:
       WEEKLY_CUTOFF_UTC: "2025-09-12T00:00:00.00Z"      
       NODE_ENV: development
       WEEKLY_REWARDS_ENABLED: "true"
+      INLINE_WEEKLY_JOBS: "false"
       NEXT_PUBLIC_WEEKLY_REWARDS_ENABLED: "true"
       SIMULATION_ENABLED: "true"
       TEST_MODE: "false"
       DEBUG: "false"
-      TIME_ACCEL: 24
-      SIM_START_AT: "2025-10-02T05:00:00Z"
+      TIME_ACCEL: 32
+      SIM_START_AT: "2025-10-31T22:00:00Z"
       ALERTS_ENABLED: "false"
       DASHBOARD_PORT: 30032
       MATURATION_ENABLED: "true"
-      RUN_DAILY_MATURATION_ONCE: "true"
+      RUN_DAILY_MATURATION_ONCE: "false"
       DAILY_MATURATION_ONCE_TIMEBASE: "real"
       DAILY_MATURATION_ENABLED: "false"
       WEEKLY_MATURATION_ENABLED: "false"
@@ -107,6 +111,57 @@ services:
       - /home/debfrynetadm/projects/dbRewards/reward-reports:/home/debfrynetadm/projects/dbRewards/reward-reports
     ports:
       - "30032:30032"  # Web dashboard for simulation
+    networks:
+      - dbrewards-network
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "5m"
+        max-file: "2"
+
+  dbrewards-weekly:
+    build: .
+    container_name: dbrewards-weekly
+    restart: "no"
+    command: ["dumb-init", "op", "run", "--", "node", "dist/scripts/run-weekly-jobs.js"]
+    profiles:
+      - simulation
+    environment:
+      OP_SERVICE_ACCOUNT_TOKEN: ${OP_SERVICE_ACCOUNT_TOKEN?missing_OP_SERVICE_ACCOUNT_TOKEN}
+      MONGO_URI: op://dbRewards/MONGO_URI/password
+      CREDS_MONGO_URI: op://dbRewards/CREDS_MONGO_URI/password
+      DISCORD_WEBHOOK_URL: op://dbRewards/DISCORD_WEBHOOK_URL/password
+      CREDS_HARDWARE_COLLECTION: "hardware"
+      CREDS_DB_NAME: "creds"
+      VALIDATE_HARDWARE_AEM: "false"
+      VALIDATE_HARDWARE_NODES: "false"
+      VALIDATE_HARDWARE_MINERS: "false"
+      VALIDATE_CREDENTIALS_RADIATION: "false"
+      VALIDATE_CREDENTIALS_ENERGY: "false"
+      VALIDATE_CREDENTIALS_AIR: "false"
+      VALIDATE_CREDENTIALS_WATER: "false"
+      VALIDATE_CREDENTIALS_WEATHER: "false"
+      NODE_ENV: development
+      NODE_OPTIONS: "--max-old-space-size=4096"
+      WEEKLY_REWARDS_ENABLED: "true"
+      NEXT_PUBLIC_WEEKLY_REWARDS_ENABLED: "true"
+      SIMULATION_ENABLED: "true"
+      TIME_ACCEL: 32
+      SIM_START_AT: "2025-10-31T22:00:00Z"
+      TEST_MODE: "false"
+      DEBUG: "false"
+      ALERTS_ENABLED: "false"
+      MATURATION_ENABLED: "true"
+      DAILY_MATURATION_ENABLED: "false"
+      WEEKLY_MATURATION_ENABLED: "true"
+      RUN_DAILY_MATURATION_ONCE: "false"
+      DAILY_MATURATION_ONCE_TIMEBASE: "real"
+      REWARD_REPORT_DIR: /home/debfrynetadm/projects/dbRewards/reward-reports
+    volumes:
+      - ./logs:/app/logs
+      - ./backups:/app/backups
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - /home/debfrynetadm/projects/dbRewards/reward-reports:/home/debfrynetadm/projects/dbRewards/reward-reports
     networks:
       - dbrewards-network
     logging:

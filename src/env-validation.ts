@@ -95,6 +95,12 @@ const envConfig: RequiredEnvVars = {
     example: "true",
     validValues: ["true", "false"]
   },
+  INLINE_WEEKLY_JOBS: {
+    required: false,
+    description: "Allow main runtime to schedule weekly roll-up/maturation jobs",
+    example: "false",
+    validValues: ["true", "false"]
+  },
   
   // Accelerated Time / Clock Control
   SIMULATION_ENABLED: {

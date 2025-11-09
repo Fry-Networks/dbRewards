@@ -63,6 +63,7 @@ import { logSection } from "./logger";
 import { getSimNow } from "./time-control";
 import { validateMacAddress } from "./security/mac-validator";
 import { type RewardReport, type RewardReportEntry } from "./reporting/reward-report";
+import { applyTfryDelta, isTfryAsset } from "./reward-totals";
 
 const minerType = {
   weather: [ "HWM", "LWM" ],
@@ -289,6 +290,7 @@ export const recordReward = async (
   const currentDate = getSimNow();
   const dateString = currentDate.toISOString().split('T')[0]; // YYYY-MM-DD format
   const assetId: string = (product.reward.tokens?.reward) || "";
+  const isTfryReward = isTfryAsset(assetId);
   const entryStatus: 'accruing' | 'pending' = WEEKLY_REWARDS_ENABLED ? 'accruing' : 'pending';
   
   DEBUG &&
@@ -314,9 +316,13 @@ export const recordReward = async (
     
     // Use findOneAndUpdate with upsert to create or update device reward document
     // Build dynamic update object based on weekly flag
-    const incFields: any = { reward_count: 1 };
+    const incFields: Record<string, number> = { reward_count: 1 };
     if (!WEEKLY_REWARDS_ENABLED) {
-      incFields.total_pending = availableAmount;
+      if (isTfryReward) {
+        applyTfryDelta(incFields, { pending: availableAmount });
+      } else {
+        incFields.total_pending = availableAmount;
+      }
     }
 
     const result = await (testMode ? TestDeviceRewardModel : DeviceRewardModel)
@@ -596,9 +602,13 @@ function isDeviceCurrentlyEligible(
       
       case 'node': {
         // Nodes (RDN/SDN/SVN): IGNORE created_at, require both registration and node staking
-        
         // Check registration staking requirement
-        if (!device.registration?.time || currentDate < device.registration.time) {
+        if (
+          !device.registration?.time ||
+          currentDate < device.registration.time ||
+          !device.registration?.amount ||
+          device.registration.amount <= 0
+        ) {
           return {
             eligible: false,
             hasVerificationMultiplier: false,
@@ -607,7 +617,12 @@ function isDeviceCurrentlyEligible(
         }
         
         // Check node staking requirement
-        if (!device.node?.time || currentDate < device.node.time) {
+        if (
+          !device.node?.time ||
+          currentDate < device.node.time ||
+          !device.node?.amount ||
+          device.node.amount <= 0
+        ) {
           return {
             eligible: false,
             hasVerificationMultiplier: false,
@@ -629,7 +644,12 @@ function isDeviceCurrentlyEligible(
         // AI Edge Miners: IGNORE created_at, require only registration staking (NO node staking)
         
         // Check registration staking requirement
-        if (!device.registration?.time || currentDate < device.registration.time) {
+        if (
+          !device.registration?.time ||
+          currentDate < device.registration.time ||
+          !device.registration?.amount ||
+          device.registration.amount <= 0
+        ) {
           return {
             eligible: false,
             hasVerificationMultiplier: false,

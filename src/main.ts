@@ -6,6 +6,7 @@ import { ProductModel, Product } from "./db/products-schema";
 import { RewardModel, TestRewardModel } from "./db/rewards-schema";
 // NEW: Import device rewards schema for aggregated reward system
 import { DeviceRewardModel, TestDeviceRewardModel, DeviceReward } from "./db/device-rewards-schema";
+import { JobRunModel, TestJobRunModel, type JobRun } from "./db/job-run-schema";
 import { doRewards } from "./reward";
 import { RewardReportAggregator, type RewardReport } from "./reporting/reward-report";
 import { writeRewardCsvReports } from "./reporting/csv-writer";
@@ -20,11 +21,20 @@ import { auditLogger } from "./security/audit-logger";
 import { backupManager } from "./security/backup-manager";
 import { dataValidator } from "./security/data-validator";
 import { logSection } from "./logger";
+import { withJobLock } from "./scheduler/job-lock";
+import { applyTfryDelta, isTfryAsset, TFRY_ASSET_ID } from "./reward-totals";
 
 const testMode = process.env.TEST_MODE
   ? process.env.TEST_MODE === "true"
   : false;
 const WEEKLY_REWARDS_ENABLED = process.env.WEEKLY_REWARDS_ENABLED === 'true';
+const INLINE_WEEKLY_JOBS =
+  process.env.INLINE_WEEKLY_JOBS === undefined
+    ? true
+    : process.env.INLINE_WEEKLY_JOBS === 'true';
+// Weekly roll-up guard rails: persistent job tracking + lock TTL so runs are idempotent across processes
+const WEEKLY_ROLLUP_JOB_NAME = 'weekly-rollup';
+const WEEKLY_ROLLUP_LOCK_TTL_MS = 15 * 60 * 1000; // 15 minutes
 // Maturation job controls
 // Global default: MATURATION_ENABLED (true unless explicitly 'false')
 const MATURATION_ENABLED = process.env.MATURATION_ENABLED !== 'false';
@@ -46,7 +56,12 @@ const REWARD_REPORT_DIR = process.env.REWARD_REPORT_DIR
 const RUN_DAILY_MATURATION_ONCE = process.env.RUN_DAILY_MATURATION_ONCE === 'true';
 const DAILY_MATURATION_ONCE_TIMEBASE = (process.env.DAILY_MATURATION_ONCE_TIMEBASE || 'real').toLowerCase(); // 'real' | 'sim'
 
-interface PendingFlipDoc { _id: Types.ObjectId; miner_key?: string; amountToFlip: number }
+interface PendingFlipDoc {
+  _id: Types.ObjectId;
+  miner_key?: string;
+  amountToFlip: number;
+  tfryAmountToFlip: number;
+}
 
 async function runDailyMaturationOnce(): Promise<void> {
   const now = DAILY_MATURATION_ONCE_TIMEBASE === 'sim' ? getSimNow() : new Date();
@@ -185,6 +200,20 @@ type HourlyRunResult = {
   report: RewardReport;
 };
 
+const DEVICE_FIELDS_FOR_REWARDS =
+  '_id miner_key is_registered reward_wallet verified staked registration node byod rewards_exception hardware created_at reward_multiplier timezone mac_addresses addresses exception_flags last_reward_date last_updated type device_type';
+
+async function loadRegisteredDevices(): Promise<Device[]> {
+  if (testMode) {
+    return await TestDeviceModel.find({ is_registered: true })
+      .select(DEVICE_FIELDS_FOR_REWARDS)
+      .lean<Device[]>();
+  }
+  return await DeviceModel.find({ is_registered: true })
+    .select(DEVICE_FIELDS_FOR_REWARDS)
+    .lean<Device[]>();
+}
+
 const main = async (devicesToProcess?: Device[]): Promise<HourlyRunResult> => {
   await connect();
   const connection = getConnection();
@@ -219,9 +248,7 @@ const main = async (devicesToProcess?: Device[]): Promise<HourlyRunResult> => {
     allDevices = await withPerformanceMonitoring(
       'find',
       testMode ? 'test-devices' : 'devices',
-      async () => testMode
-        ? ((await TestDeviceModel.find({ is_registered: true })) as Device[])
-        : ((await DeviceModel.find({ is_registered: true })) as Device[])
+      async () => await loadRegisteredDevices()
     );
   }
 
@@ -415,75 +442,79 @@ async function rewardSystem() {
       }
 
       inFlightHours.add(hourKey);
-      
-      // Load all registered devices
-      const allDevices = testMode
-        ? ((await TestDeviceModel.find({ is_registered: true })) as Device[])
-        : ((await DeviceModel.find({ is_registered: true })) as Device[]);
-      
-      // Get devices assigned to this hour
-      const hourlyDevices = getDevicesForHour(allDevices, currentHour);
-      
-      logSection(
-        `Starting hourly reward processing for hour ${currentHour}`,
-        `  Cycle devices: ${hourlyDevices.length}`,
-        `  Total registered devices: ${allDevices.length}`
-      );
-      
-      if (hourlyDevices.length > 0) {
-        // Track processing metrics with accurate reward counting
-        const startTime = getSimNow();
-        // Use the main function which handles caching, retries, error recovery, and returns a detailed summary
-        const { summary: hourlySummary, report } = await main(hourlyDevices);
 
-        const endTime = getSimNow();
+      try {
+        await withJobLock('hourly-processing', ['weekly-rollup', 'daily-backup', 'data-validation'], async () => {
+          // Load all registered devices
+          const allDevices = testMode
+            ? ((await TestDeviceModel.find({ is_registered: true })) as Device[])
+            : ((await DeviceModel.find({ is_registered: true })) as Device[]);
+          
+          // Get devices assigned to this hour
+          const hourlyDevices = getDevicesForHour(allDevices, currentHour);
+          
+          logSection(
+            `Starting hourly reward processing for hour ${currentHour}`,
+            `  Cycle devices: ${hourlyDevices.length}`,
+            `  Total registered devices: ${allDevices.length}`
+          );
+          
+          if (hourlyDevices.length > 0) {
+            // Track processing metrics with accurate reward counting
+            const startTime = getSimNow();
+            // Use the main function which handles caching, retries, error recovery, and returns a detailed summary
+            const { summary: hourlySummary, report } = await main(hourlyDevices);
 
-        // Treat inserted rows count as rewards generated to avoid large unwinds under acceleration
-        const actualRewardsGenerated = Math.max(hourlySummary.insertedRows, 0);
-        // Prefer insertedDevices over time-window counts for success
-        const devicesSucceeded = Math.max(0, Math.min(hourlySummary.insertedDevices, hourlyDevices.length));
-        const devicesFailed = Math.max(0, hourlyDevices.length - devicesSucceeded);
-        
-        const metrics: ProcessingMetrics = {
-          startTime,
-          endTime,
-          devicesProcessed: hourlyDevices.length,
-          devicesSucceeded: devicesSucceeded,
-          devicesFailed: devicesFailed,
-          rewardsGenerated: actualRewardsGenerated,
-          processingTimeMs: endTime.getTime() - startTime.getTime(),
-          hour: currentHour,
-          eligibleDevices: hourlySummary.eligibleDevices,
-          insertedDevices: hourlySummary.insertedDevices,
-          insertedRows: hourlySummary.insertedRows,
-          skippedDuplicates: hourlySummary.skippedDuplicates,
-          notEligible: hourlySummary.notEligible,
-          noWallet: hourlySummary.noWallet,
-          otherValidation: hourlySummary.otherValidation,
-          dbErrors: hourlySummary.dbErrors
-        };
-        
-        // Log comprehensive metrics
-        await logProcessingMetrics(metrics);
+            const endTime = getSimNow();
 
-        try {
-          await writeRewardCsvReports(startTime, report, REWARD_REPORT_DIR);
-        } catch (reportError) {
-          console.error('Failed to write hourly reward CSV reports:', reportError);
-        }
+            // Treat inserted rows count as rewards generated to avoid large unwinds under acceleration
+            const actualRewardsGenerated = Math.max(hourlySummary.insertedRows, 0);
+            // Prefer insertedDevices over time-window counts for success
+            const devicesSucceeded = Math.max(0, Math.min(hourlySummary.insertedDevices, hourlyDevices.length));
+            const devicesFailed = Math.max(0, hourlyDevices.length - devicesSucceeded);
+            
+            const metrics: ProcessingMetrics = {
+              startTime,
+              endTime,
+              devicesProcessed: hourlyDevices.length,
+              devicesSucceeded: devicesSucceeded,
+              devicesFailed: devicesFailed,
+              rewardsGenerated: actualRewardsGenerated,
+              processingTimeMs: endTime.getTime() - startTime.getTime(),
+              hour: currentHour,
+              eligibleDevices: hourlySummary.eligibleDevices,
+              insertedDevices: hourlySummary.insertedDevices,
+              insertedRows: hourlySummary.insertedRows,
+              skippedDuplicates: hourlySummary.skippedDuplicates,
+              notEligible: hourlySummary.notEligible,
+              noWallet: hourlySummary.noWallet,
+              otherValidation: hourlySummary.otherValidation,
+              dbErrors: hourlySummary.dbErrors
+            };
+            
+            // Log comprehensive metrics
+            await logProcessingMetrics(metrics);
 
+            try {
+              await writeRewardCsvReports(startTime, report, REWARD_REPORT_DIR);
+            } catch (reportError) {
+              console.error('Failed to write hourly reward CSV reports:', reportError);
+            }
+          }
+
+          // Record this execution
+          lastExecutionHours.push(hourKey);
+          
+          // Keep only last 48 hours to prevent memory bloat
+          if (lastExecutionHours.length > 48) {
+            lastExecutionHours = lastExecutionHours.slice(-48);
+          }
+          
+          logSection(`Completed hourly processing for hour ${currentHour}`);
+        });
+      } finally {
+        inFlightHours.delete(hourKey);
       }
-
-      // Record this execution and clear in-flight marker
-      lastExecutionHours.push(hourKey);
-      inFlightHours.delete(hourKey);
-      
-      // Keep only last 48 hours to prevent memory bloat
-      if (lastExecutionHours.length > 48) {
-        lastExecutionHours = lastExecutionHours.slice(-48);
-      }
-      
-      logSection(`Completed hourly processing for hour ${currentHour}`);
     }
   } catch (error) {
     console.error(`Error in hourly reward system (hour ${currentHour}):`, error);
@@ -508,7 +539,7 @@ async function rewardSystem() {
 
 // Run a specific hour's batch now, bypassing the minute window gating.
 // Used for post-roll-up catch-up to ensure hour 0 (midnight) is processed even if the window was missed.
-async function runHourBatch(hour: number): Promise<void> {
+async function runHourBatch(hour: number, preloadedDevices?: Device[]): Promise<void> {
   if (weeklyRollupInProgress) return; // safety guard
   const now = getSimNow();
   const hourKey = `${now.toDateString()}-${hour}`;
@@ -519,54 +550,54 @@ async function runHourBatch(hour: number): Promise<void> {
 
   try {
     await connect();
-    const allDevices: Device[] = await withPerformanceMonitoring(
-      'find',
-      testMode ? 'test-devices' : 'devices',
-      async () => testMode
-        ? ((await TestDeviceModel.find({ is_registered: true })) as Device[])
-        : ((await DeviceModel.find({ is_registered: true })) as Device[])
-    );
-    const hourlyDevices = getDevicesForHour(allDevices, hour);
+    await withJobLock('hourly-processing', ['weekly-rollup', 'daily-backup', 'data-validation'], async () => {
+      const allDevices: Device[] = preloadedDevices ?? await withPerformanceMonitoring(
+        'find',
+        testMode ? 'test-devices' : 'devices',
+        async () => await loadRegisteredDevices()
+      );
+      const hourlyDevices = getDevicesForHour(allDevices, hour);
 
-    const { summary: hourlySummary, report } = await main(hourlyDevices);
+      const { summary: hourlySummary, report } = await main(hourlyDevices);
 
-    const endTime = getSimNow();
-    const actualRewardsGenerated = Math.max(hourlySummary.insertedRows, 0);
+      const endTime = getSimNow();
+      const actualRewardsGenerated = Math.max(hourlySummary.insertedRows, 0);
 
-    const devicesSucceeded = Math.max(0, Math.min(hourlySummary.insertedDevices, hourlyDevices.length));
-    const devicesFailed = Math.max(0, hourlyDevices.length - devicesSucceeded);
+      const devicesSucceeded = Math.max(0, Math.min(hourlySummary.insertedDevices, hourlyDevices.length));
+      const devicesFailed = Math.max(0, hourlyDevices.length - devicesSucceeded);
 
-    const metrics: ProcessingMetrics = {
-      startTime,
-      endTime,
-      devicesProcessed: hourlyDevices.length,
-      devicesSucceeded,
-      devicesFailed,
-      rewardsGenerated: actualRewardsGenerated,
-      processingTimeMs: endTime.getTime() - startTime.getTime(),
-      hour,
-      eligibleDevices: hourlySummary.eligibleDevices,
-      insertedDevices: hourlySummary.insertedDevices,
-      insertedRows: hourlySummary.insertedRows,
-      skippedDuplicates: hourlySummary.skippedDuplicates,
-      notEligible: hourlySummary.notEligible,
-      noWallet: hourlySummary.noWallet,
-      otherValidation: hourlySummary.otherValidation,
-      dbErrors: hourlySummary.dbErrors
-    };
-    await logProcessingMetrics(metrics);
+      const metrics: ProcessingMetrics = {
+        startTime,
+        endTime,
+        devicesProcessed: hourlyDevices.length,
+        devicesSucceeded,
+        devicesFailed,
+        rewardsGenerated: actualRewardsGenerated,
+        processingTimeMs: endTime.getTime() - startTime.getTime(),
+        hour,
+        eligibleDevices: hourlySummary.eligibleDevices,
+        insertedDevices: hourlySummary.insertedDevices,
+        insertedRows: hourlySummary.insertedRows,
+        skippedDuplicates: hourlySummary.skippedDuplicates,
+        notEligible: hourlySummary.notEligible,
+        noWallet: hourlySummary.noWallet,
+        otherValidation: hourlySummary.otherValidation,
+        dbErrors: hourlySummary.dbErrors
+      };
+      await logProcessingMetrics(metrics);
 
-    try {
-      await writeRewardCsvReports(startTime, report, REWARD_REPORT_DIR);
-    } catch (reportError) {
-      console.error('Failed to write hourly reward CSV reports:', reportError);
-    }
+      try {
+        await writeRewardCsvReports(startTime, report, REWARD_REPORT_DIR);
+      } catch (reportError) {
+        console.error('Failed to write hourly reward CSV reports:', reportError);
+      }
 
-    lastExecutionHours.push(hourKey);
-    if (lastExecutionHours.length > 48) {
-      lastExecutionHours = lastExecutionHours.slice(-48);
-    }
-    logSection(`Catch-up: completed hour ${hour} batch`);
+      lastExecutionHours.push(hourKey);
+      if (lastExecutionHours.length > 48) {
+        lastExecutionHours = lastExecutionHours.slice(-48);
+      }
+      logSection(`Catch-up: completed hour ${hour} batch`);
+    });
   } catch (err) {
     console.error(`Catch-up hour ${hour} failed:`, err);
   }
@@ -645,6 +676,27 @@ async function updateAllPendingStatuses(): Promise<void> {
                 in: '$$r.amount'
               }
             }
+          },
+          tfryAmountToFlip: {
+            $sum: {
+              $map: {
+                input: {
+                  $filter: {
+                    input: '$daily_rewards',
+                    as: 'r',
+                    cond: {
+                      $and: [
+                        { $eq: ['$$r.status', 'pending'] },
+                        { $lte: ['$$r.created_at', thirtyDaysAgo] },
+                        { $eq: ['$$r.asset_id', TFRY_ASSET_ID] }
+                      ]
+                    }
+                  }
+                },
+                as: 'r',
+                in: '$$r.amount'
+              }
+            }
           }
         }
       }
@@ -656,11 +708,21 @@ async function updateAllPendingStatuses(): Promise<void> {
     for await (const doc of cursor2 as AsyncIterable<PendingFlipDoc>) {
       const amount = Number(doc.amountToFlip || 0);
       if (amount <= 0) continue;
+      const tfryAmount = Number(doc.tfryAmountToFlip || 0);
+      const otherAmount = Math.round((amount - tfryAmount) * 100) / 100;
+      const inc: Record<string, number> = {};
+      if (otherAmount !== 0) {
+        inc.total_pending = -otherAmount;
+        inc.total_claimable = otherAmount;
+      }
+      if (tfryAmount !== 0) {
+        applyTfryDelta(inc, { pending: -tfryAmount, claimable: tfryAmount });
+      }
       const upd = await Model.updateOne(
         { _id: doc._id },
         {
           $set: { 'daily_rewards.$[elem].status': 'claimable', last_updated: currentDate },
-          $inc: { total_pending: -amount, total_claimable: amount }
+          $inc: inc
         },
         { arrayFilters: [ { 'elem.status': 'pending', 'elem.created_at': { $lte: thirtyDaysAgo } } ] }
       );
@@ -715,7 +777,7 @@ function getLastWeekWindowUTC(now: Date): {
 }
 
 // NEW: Weekly maturation (pending -> claimable) based on unlock_at + 30 days
-async function updateWeeklyPendingStatuses(): Promise<void> {
+export async function updateWeeklyPendingStatuses(): Promise<void> {
   if (!WEEKLY_MATURATION_ENABLED) {
     logSection('⏸️  Weekly maturation disabled');
     return;
@@ -731,17 +793,27 @@ async function updateWeeklyPendingStatuses(): Promise<void> {
     let totalUpdated = 0;
     for (const deviceReward of devices) {
       let delta = 0;
+      let tfryDelta = 0;
       let updatedCount = 0;
       deviceReward.weekly_rewards.forEach(wr => {
         if (wr.status === 'pending' && wr.unlock_at <= thirtyDaysAgo) {
           wr.status = 'claimable';
           delta += wr.amount;
+          if (isTfryAsset(wr.asset_id)) {
+            tfryDelta += wr.amount;
+          }
           updatedCount++;
         }
       });
       if (updatedCount > 0) {
         deviceReward.total_pending -= delta;
         deviceReward.total_claimable += delta;
+        if (tfryDelta !== 0) {
+          const pendingBase = Number(deviceReward.tfry_pending ?? 0);
+          const claimableBase = Number(deviceReward.tfry_claimable ?? 0);
+          deviceReward.tfry_pending = Math.round((pendingBase - tfryDelta) * 100) / 100;
+          deviceReward.tfry_claimable = Math.round((claimableBase + tfryDelta) * 100) / 100;
+        }
         deviceReward.last_updated = currentDate;
         deviceReward.markModified?.('weekly_rewards');
         await deviceReward.save();
@@ -755,19 +827,178 @@ async function updateWeeklyPendingStatuses(): Promise<void> {
   }
 }
 
+// Weekly roll-up execution bookkeeping; ensures we capture the same metrics we persist and report
+type WeeklyRollupMetrics = {
+  eligibleDevices: number;
+  rewardedDevices: number;
+  weeklyEntriesCreated: number;
+  duplicateEntriesSkipped: number;
+  errors: number;
+};
+
+let weeklyIndexEnsured = false; // Cache flag so we only request index creation once per process
+
+// Ensure the multikey unique index exists before we attempt writes; relies on Mongo's idempotent createIndex
+async function ensureWeeklyRewardIndex(): Promise<void> {
+  if (weeklyIndexEnsured) {
+    return;
+  }
+  try {
+    const model = testMode ? TestDeviceRewardModel : DeviceRewardModel;
+    await model.collection.createIndex(
+      { miner_key: 1, 'weekly_rewards.unlock_at': 1, 'weekly_rewards.asset_id': 1 },
+      { unique: true, sparse: true, name: 'unique_weekly_window_per_asset' },
+    );
+    weeklyIndexEnsured = true;
+  } catch (err: any) {
+    if (err?.code === 85 || err?.codeName === 'IndexOptionsConflict') {
+      weeklyIndexEnsured = true;
+      return;
+    }
+    if (err?.code === 11000) {
+      console.error('Failed to enforce weekly reward unique index due to existing duplicates:', err);
+    } else {
+      console.error('Failed to ensure weekly reward unique index:', err);
+    }
+  }
+}
+
+const isDuplicateKeyError = (err: unknown): boolean =>
+  !!err && typeof err === 'object' && 'code' in err && (err as { code?: number }).code === 11000;
+
+// Post-run Discord summary so on-call gets immediate insight into roll-up health/volume
+async function sendWeeklyRollupReport(
+  status: 'completed' | 'failed',
+  summary: {
+    jobKey: string;
+    windowStart: Date;
+    windowEnd: Date;
+    unlockAt: Date;
+    metrics: WeeklyRollupMetrics;
+    durationMs: number;
+    errorMessages: string[];
+  },
+): Promise<void> {
+  const { metrics } = summary;
+  const totalProcessed = metrics.rewardedDevices + metrics.duplicateEntriesSkipped + metrics.errors;
+  const message = [
+    `Window: ${summary.windowStart.toISOString()} → ${summary.windowEnd.toISOString()} (unlock ${summary.unlockAt.toISOString()})`,
+    `Eligible devices: ${metrics.eligibleDevices}`,
+    `Rewarded devices: ${metrics.rewardedDevices}`,
+    `Weekly entries created: ${metrics.weeklyEntriesCreated}`,
+    `Duplicate entries skipped: ${metrics.duplicateEntriesSkipped}`,
+    `Errors: ${metrics.errors}`,
+    `Duration: ${(summary.durationMs / 1000).toFixed(1)}s`,
+  ].join('\n');
+
+  const alertLevel = status === 'completed' ? 'INFO' : 'CRITICAL';
+
+  await alertingSystem.emit(alertLevel, `Weekly roll-up ${status}`, message, {
+    jobKey: summary.jobKey,
+    status,
+    metrics: {
+      ...metrics,
+      totalProcessed,
+    },
+    durationMs: summary.durationMs,
+    errors: summary.errorMessages.slice(0, 5),
+  }, { force: true });
+}
+
 // NEW: Weekly roll-up (Friday 00:05 UTC)
-async function finalizeWeeklyRewards(): Promise<void> {
+export async function finalizeWeeklyRewards(): Promise<void> {
   if (!WEEKLY_REWARDS_ENABLED) {
     return;
   }
-  const now = getSimNow();
-  const { weekStart, weekEnd, unlockAt, dateStrings } = getLastWeekWindowUTC(now);
 
-  logSection(`Starting weekly roll-up for window ${weekStart.toISOString()} → ${weekEnd.toISOString()} (unlock ${unlockAt.toISOString()})`);
+  // Distributed guard so only one instance handles a window; metrics + status live in rewards_job_runs
+  await withJobLock('weekly-rollup', ['hourly-processing', 'daily-backup', 'data-validation'], async () => {
+    const now = getSimNow();
+    const { weekStart, weekEnd, unlockAt, dateStrings } = getLastWeekWindowUTC(now);
+    const jobKey = `${WEEKLY_ROLLUP_JOB_NAME}:${unlockAt.toISOString()}`;
 
-  try {
-    // Use an aggregation cursor to avoid loading all docs into memory.
+    const JobRunModelToUse = testMode ? TestJobRunModel : JobRunModel;
+
+    // Check existing run metadata before acquiring a new lock to handle stale/crashed executions gracefully
+    const existingJob = await JobRunModelToUse.findOne({ job_key: jobKey }).exec();
+    if (existingJob) {
+      if (existingJob.status === 'completed') {
+        logSection(`Weekly roll-up skipped: window ${unlockAt.toISOString()} already processed (completed).`);
+        return;
+      }
+      if (existingJob.status === 'running') {
+        const lastBeat = existingJob.last_heartbeat ?? existingJob.started_at ?? existingJob.window_start;
+        const age = lastBeat ? now.getTime() - lastBeat.getTime() : 0;
+        if (age <= WEEKLY_ROLLUP_LOCK_TTL_MS) {
+          logSection(`Weekly roll-up skipped: window ${unlockAt.toISOString()} already running (heartbeat ${Math.round(age / 1000)}s ago).`);
+          return;
+        }
+        await JobRunModelToUse.updateOne(
+          { _id: existingJob._id, status: 'running' },
+          {
+            $set: { status: 'failed', last_heartbeat: now },
+            $push: { error_messages: `Detected stale weekly roll-up; lock expired after ${Math.round(age / 1000)}s.` },
+          },
+        );
+      }
+    }
+
+    await ensureWeeklyRewardIndex();
+
+    let jobRun: JobRun | null = null;
+    try {
+      // Acquire/refresh job record; unique key enforces single active run per window even across processes
+      jobRun = await JobRunModelToUse.findOneAndUpdate(
+        { job_key: jobKey, status: { $in: ['pending', 'failed'] } },
+        {
+          $setOnInsert: {
+            job_key: jobKey,
+            job_name: WEEKLY_ROLLUP_JOB_NAME,
+            window_start: weekStart,
+            window_end: weekEnd,
+            unlock_at: unlockAt,
+          },
+          $set: {
+            status: 'running',
+            started_at: now,
+            last_heartbeat: now,
+            'metrics.eligible_devices': 0,
+            'metrics.rewarded_devices': 0,
+            'metrics.weekly_entries_created': 0,
+            'metrics.duplicate_entries_skipped': 0,
+            'metrics.errors': 0,
+            error_messages: [],
+          },
+        },
+        { upsert: true, new: true },
+      );
+    } catch (lockError) {
+      if (isDuplicateKeyError(lockError)) {
+        const existing = await JobRunModelToUse.findOne({ job_key: jobKey }).lean();
+        if (existing && (existing.status === 'running' || existing.status === 'completed')) {
+          logSection(`Weekly roll-up skipped: window ${unlockAt.toISOString()} already processed (${existing.status}).`);
+          return;
+        }
+      }
+      throw lockError;
+    }
+
+    if (!jobRun) {
+      const existing = await JobRunModelToUse.findOne({ job_key: jobKey }).lean();
+      if (existing && (existing.status === 'running' || existing.status === 'completed')) {
+        logSection(`Weekly roll-up skipped: window ${unlockAt.toISOString()} already processed (${existing.status}).`);
+        return;
+      }
+      logSection(`Weekly roll-up skipped: window ${unlockAt.toISOString()} status unknown (no lock acquired).`);
+      return;
+    }
+
+    logSection(
+      `Starting weekly roll-up for window ${weekStart.toISOString()} → ${weekEnd.toISOString()} (unlock ${unlockAt.toISOString()})`,
+    );
+
     const Model = testMode ? TestDeviceRewardModel : DeviceRewardModel;
+
     type WeeklyRewardEntry = {
       week_start: Date;
       week_end: Date;
@@ -778,95 +1009,255 @@ async function finalizeWeeklyRewards(): Promise<void> {
       created_at: Date;
       reward_number: number;
     };
+
     type RollupAggDoc = {
       _id: Types.ObjectId;
       miner_key: string;
       weekly_reward_count?: number;
-      existingWeeklyAssets?: string[];
+      existingWeeklyKeys?: string[];
       accruals: Array<{ asset_id: string; amount: number; date: string }>;
     };
+
     const pipeline = [
       { $match: { daily_rewards: { $elemMatch: { status: 'accruing', date: { $in: dateStrings } } } } },
-      { $project: {
+      {
+        $project: {
           _id: 1,
           miner_key: 1,
           weekly_reward_count: 1,
-          existingWeeklyAssets: {
+          existingWeeklyKeys: {
             $map: {
               input: {
-                $filter: { input: '$weekly_rewards', as: 'w', cond: { $eq: ['$$w.unlock_at', unlockAt] } }
+                $filter: { input: '$weekly_rewards', as: 'w', cond: { $eq: ['$$w.unlock_at', unlockAt] } },
               },
-              as: 'w', in: '$$w.asset_id'
-            }
+              as: 'w',
+              in: {
+                $concat: ['$$w.asset_id', '|', { $toString: '$$w.unlock_at' }],
+              },
+            },
           },
           accruals: {
             $filter: {
-              input: '$daily_rewards', as: 'r',
-              cond: { $and: [ { $eq: ['$$r.status','accruing'] }, { $in: ['$$r.date', dateStrings] } ] }
-            }
-          }
-        }
-      }
+              input: '$daily_rewards',
+              as: 'r',
+              cond: { $and: [{ $eq: ['$$r.status', 'accruing'] }, { $in: ['$$r.date', dateStrings] }] },
+            },
+          },
+        },
+      },
     ];
 
     const cursor = Model.aggregate<RollupAggDoc>(pipeline).cursor({ batchSize: 200 });
 
-    let devicesProcessed = 0;
-    for await (const doc of cursor as AsyncIterable<RollupAggDoc>) {
-      const accruals = doc.accruals || [];
-      if (!accruals.length) continue;
+    const metrics: WeeklyRollupMetrics = {
+      eligibleDevices: 0,
+      rewardedDevices: 0,
+      weeklyEntriesCreated: 0,
+      duplicateEntriesSkipped: 0,
+      errors: 0,
+    };
+    const errorMessages: string[] = [];
+    const startTime = Date.now();
 
-      const byAsset = new Map<string, number>();
-      for (const r of accruals) {
-        byAsset.set(r.asset_id, Math.round(((byAsset.get(r.asset_id) || 0) + (r.amount || 0)) * 100) / 100);
+    const updateJobRunMetrics = async (): Promise<void> => {
+      if (!jobRun?._id) {
+        return;
+      }
+      await JobRunModelToUse.updateOne(
+        { _id: jobRun._id },
+        {
+          $set: {
+            last_heartbeat: getSimNow(),
+            'metrics.eligible_devices': metrics.eligibleDevices,
+            'metrics.rewarded_devices': metrics.rewardedDevices,
+            'metrics.weekly_entries_created': metrics.weeklyEntriesCreated,
+            'metrics.duplicate_entries_skipped': metrics.duplicateEntriesSkipped,
+            'metrics.errors': metrics.errors,
+          },
+        },
+      );
+    };
+
+    try {
+      let processed = 0;
+      for await (const doc of cursor as AsyncIterable<RollupAggDoc>) {
+        const accruals = doc.accruals || [];
+        if (!accruals.length) {
+          continue;
+        }
+
+        metrics.eligibleDevices += 1;
+
+        const byAsset = new Map<string, number>();
+        for (const r of accruals) {
+          const current = byAsset.get(r.asset_id) || 0;
+          byAsset.set(r.asset_id, Math.round((current + (r.amount || 0)) * 100) / 100);
+        }
+
+        const weeklyEntries: WeeklyRewardEntry[] = [];
+        const startNo = (doc.weekly_reward_count || 0) + 1;
+        let idx = 0;
+        let tfryPendingDelta = 0;
+        let tfryAggregatedDelta = 0;
+        let otherAssetPending = 0;
+        const existingKeys = new Set<string>((doc.existingWeeklyKeys || []).map((key: string) => String(key)));
+
+        for (const [asset_id, amount] of byAsset.entries()) {
+          const weeklyKey = `${String(asset_id)}|${unlockAt.toISOString()}`;
+          if (existingKeys.has(weeklyKey)) {
+            metrics.duplicateEntriesSkipped += 1;
+            continue;
+          }
+          if (!(amount > 0)) {
+            continue;
+          }
+
+          weeklyEntries.push({
+            week_start: weekStart,
+            week_end: weekEnd,
+            unlock_at: unlockAt,
+            status: 'pending',
+            asset_id,
+            amount,
+            created_at: unlockAt,
+            reward_number: startNo + idx,
+          });
+          idx += 1;
+          if (isTfryAsset(asset_id)) {
+            tfryPendingDelta = Math.round((tfryPendingDelta + amount) * 100) / 100;
+            tfryAggregatedDelta = Math.round((tfryAggregatedDelta + amount) * 100) / 100;
+          } else {
+            otherAssetPending = Math.round((otherAssetPending + amount) * 100) / 100;
+          }
+          existingKeys.add(weeklyKey);
+        }
+
+        if (!weeklyEntries.length) {
+          continue;
+        }
+
+        const inc: Record<string, number> = { weekly_reward_count: weeklyEntries.length };
+        if (otherAssetPending !== 0) {
+          inc.total_pending = otherAssetPending;
+        }
+        if (tfryPendingDelta !== 0 || tfryAggregatedDelta !== 0) {
+          applyTfryDelta(inc, {
+            pending: tfryPendingDelta || undefined,
+            aggregated: tfryAggregatedDelta || undefined,
+          });
+        }
+
+        const update: Record<string, unknown> = {
+          $set: { 'daily_rewards.$[elem].status': 'aggregated', last_updated: now },
+          $push: { weekly_rewards: { $each: weeklyEntries } },
+          $inc: inc,
+        };
+        const arrayFilters = [{ 'elem.status': 'accruing', 'elem.date': { $in: dateStrings } }];
+
+        try {
+          const res = await Model.updateOne({ _id: doc._id }, update, { arrayFilters });
+          if (res.modifiedCount && res.modifiedCount > 0) {
+            metrics.rewardedDevices += 1;
+            metrics.weeklyEntriesCreated += weeklyEntries.length;
+          } else {
+            metrics.duplicateEntriesSkipped += weeklyEntries.length;
+          }
+        } catch (error) {
+          if (isDuplicateKeyError(error)) {
+            metrics.duplicateEntriesSkipped += weeklyEntries.length;
+          } else {
+            metrics.errors += 1;
+            const identifier = doc.miner_key ?? doc._id.toHexString();
+            errorMessages.push(`${identifier}: ${(error as Error).message || error}`);
+          }
+        }
+
+        processed += 1;
+        if (processed % 250 === 0) {
+          await updateJobRunMetrics();
+        }
       }
 
-      const existing = new Set<string>((doc.existingWeeklyAssets || []).map((x: string) => String(x)));
+      const finishTime = getSimNow();
+      const status: 'completed' | 'failed' = metrics.errors > 0 ? 'failed' : 'completed';
 
-      const weeklyEntries: WeeklyRewardEntry[] = [];
-      const startNo = (doc.weekly_reward_count || 0) + 1;
-      let idx = 0;
-      let incPending = 0;
-      for (const [asset_id, amount] of byAsset.entries()) {
-        if (existing.has(String(asset_id))) continue; // already aggregated for this asset in this window
-        weeklyEntries.push({
-          week_start: weekStart,
-          week_end: weekEnd,
-          unlock_at: unlockAt,
-          status: 'pending',
-          asset_id,
-          amount,
-          created_at: unlockAt,
-          reward_number: startNo + idx
-        });
-        idx++;
-        incPending += amount;
+      if (!jobRun?._id) {
+        console.error('Weekly roll-up could not record completion: missing jobRun reference.');
+        return;
       }
+      await JobRunModelToUse.updateOne(
+        { _id: jobRun._id },
+        {
+          $set: {
+            status,
+            finished_at: finishTime,
+            last_heartbeat: finishTime,
+            'metrics.eligible_devices': metrics.eligibleDevices,
+            'metrics.rewarded_devices': metrics.rewardedDevices,
+            'metrics.weekly_entries_created': metrics.weeklyEntriesCreated,
+            'metrics.duplicate_entries_skipped': metrics.duplicateEntriesSkipped,
+            'metrics.errors': metrics.errors,
+            error_messages: errorMessages.slice(0, 20),
+          },
+        },
+      );
 
-      // Always mark window accruals as aggregated (idempotent). Only bump totals/counts if we added entries.
-      const update: Record<string, unknown> = {
-        $set: { 'daily_rewards.$[elem].status': 'aggregated', last_updated: now },
-      };
-      const arrayFilters = [ { 'elem.status': 'accruing', 'elem.date': { $in: dateStrings } } ];
+      await sendWeeklyRollupReport(status, {
+        jobKey,
+        windowStart: weekStart,
+        windowEnd: weekEnd,
+        unlockAt,
+        metrics,
+        durationMs: Date.now() - startTime,
+        errorMessages,
+      });
 
-      if (weeklyEntries.length > 0) {
-        update.$push = { weekly_rewards: { $each: weeklyEntries } };
-        update.$inc = { weekly_reward_count: weeklyEntries.length, total_pending: incPending };
+      if (status === 'completed') {
+        logSection(
+          `Weekly roll-up completed: eligible=${metrics.eligibleDevices}, rewarded=${metrics.rewardedDevices}, duplicates=${metrics.duplicateEntriesSkipped}`,
+        );
+      } else {
+        console.error(
+          `Weekly roll-up finished with errors: eligible=${metrics.eligibleDevices}, rewarded=${metrics.rewardedDevices}, duplicates=${metrics.duplicateEntriesSkipped}, errors=${metrics.errors}`,
+        );
       }
-
-      const res = await Model.updateOne({ _id: doc._id }, update, { arrayFilters });
-      if (res.modifiedCount && res.modifiedCount > 0) {
-        devicesProcessed++;
+    } catch (err) {
+      metrics.errors += 1;
+      const errorMessage = err instanceof Error ? err.message : String(err);
+      errorMessages.push(errorMessage);
+      const finishTime = getSimNow();
+      if (!jobRun?._id) {
+        console.error('Weekly roll-up failed but job record missing. Error:', err);
+        return;
       }
+      await JobRunModelToUse.updateOne(
+        { _id: jobRun._id },
+        {
+          $set: {
+            status: 'failed',
+            finished_at: finishTime,
+            last_heartbeat: finishTime,
+            'metrics.eligible_devices': metrics.eligibleDevices,
+            'metrics.rewarded_devices': metrics.rewardedDevices,
+            'metrics.weekly_entries_created': metrics.weeklyEntriesCreated,
+            'metrics.duplicate_entries_skipped': metrics.duplicateEntriesSkipped,
+            'metrics.errors': metrics.errors,
+          },
+          $push: { error_messages: errorMessage },
+        },
+      );
+      await sendWeeklyRollupReport('failed', {
+        jobKey,
+        windowStart: weekStart,
+        windowEnd: weekEnd,
+        unlockAt,
+        metrics,
+        durationMs: Date.now() - startTime,
+        errorMessages,
+      });
+      console.error('Weekly roll-up failed:', err);
     }
-    logSection(`Weekly roll-up completed: ${devicesProcessed} devices processed (streamed)`);
-    if (devicesProcessed === 0) {
-      console.warn('⚠️ Weekly roll-up processed 0 devices. Check scheduler and accrual writes.');
-      try { await alertingSystem.sendTestAlert(); } catch {}
-    }
-  } catch (err) {
-    console.error('Weekly roll-up failed:', err);
-  }
+  });
 }
 
 // Schedule weekly roll-up at Friday 00:05–00:10 UTC window
@@ -892,7 +1283,8 @@ function scheduleWeeklyRollup() {
         const after = getSimNow();
         const midnightKey = `${after.toDateString()}-0`;
         if (after.getHours() === 0 && !lastExecutionHours.includes(midnightKey)) {
-          await runHourBatch(0);
+          const cachedDevices = await loadRegisteredDevices();
+          await runHourBatch(0, cachedDevices);
         }
         lastExecutionHours.push(thisFridayKey);
         // Keep only last 8 roll keys
@@ -948,7 +1340,9 @@ function scheduleStatusUpdates() {
       if (!lastExecutionHours.includes(todayKey)) {
         await updateAllPendingStatuses();
         // Also update weekly pending -> claimable maturation
-        await updateWeeklyPendingStatuses();
+        if (INLINE_WEEKLY_JOBS) {
+          await updateWeeklyPendingStatuses();
+        }
         lastExecutionHours.push(todayKey);
 
         // Keep only last 7 days of status update records
@@ -963,7 +1357,8 @@ function scheduleStatusUpdates() {
         const catchupHour = afterUpdates.getHours();
         const catchupKey = `${afterUpdates.toDateString()}-${catchupHour}`;
         if (!lastExecutionHours.includes(catchupKey)) {
-          await runHourBatch(catchupHour);
+          const cachedDevices = await loadRegisteredDevices();
+          await runHourBatch(catchupHour, cachedDevices);
         }
       }
     }
@@ -1043,10 +1438,14 @@ export async function startRewardSystem(): Promise<void> {
     await runDailyMaturationOnce();
   }
   // If the process starts after a Friday window, ensure last week's roll-up happened
-  await maybeRunMissedWeeklyRollup();
+  if (INLINE_WEEKLY_JOBS) {
+    await maybeRunMissedWeeklyRollup();
+  }
   await rewardSystem();
   scheduleStatusUpdates();
-  scheduleWeeklyRollup();
+  if (INLINE_WEEKLY_JOBS) {
+    scheduleWeeklyRollup();
+  }
   startPeriodicHealthChecks(); // Start Discord alerting system
 
   // Check every minute for execution time

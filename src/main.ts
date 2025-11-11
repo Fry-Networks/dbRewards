@@ -203,6 +203,12 @@ type HourlyRunResult = {
 const DEVICE_FIELDS_FOR_REWARDS =
   '_id miner_key is_registered reward_wallet verified staked registration node byod rewards_exception hardware created_at reward_multiplier timezone mac_addresses addresses exception_flags last_reward_date last_updated type device_type';
 
+function getDeviceTypeFromMinerKey(minerKey?: string): string {
+  if (!minerKey) return 'UNKNOWN';
+  const prefix = minerKey.split('-')[0]?.trim().toUpperCase();
+  return prefix && prefix.length > 0 ? prefix : 'UNKNOWN';
+}
+
 async function loadRegisteredDevices(): Promise<Device[]> {
   if (testMode) {
     return await TestDeviceModel.find({ is_registered: true })
@@ -784,46 +790,156 @@ export async function updateWeeklyPendingStatuses(): Promise<void> {
   }
   const currentDate = getSimNow();
   const thirtyDaysAgo = new Date(currentDate.getTime() - 30 * 24 * 60 * 60 * 1000);
+  const startTime = Date.now();
 
   logSection('Starting weekly rewards maturation job...');
-  try {
-    const devices = await (testMode ? TestDeviceRewardModel : DeviceRewardModel)
-      .find({ 'weekly_rewards': { $elemMatch: { status: 'pending', unlock_at: { $lte: thirtyDaysAgo } } } });
+  let documentsExamined = 0;
+  let documentsUpdated = 0;
+  let totalEntriesUpdated = 0;
+  let totalAmountShifted = 0;
+  let totalTfryShifted = 0;
 
-    let totalUpdated = 0;
-    for (const deviceReward of devices) {
+  try {
+    const Model = testMode ? TestDeviceRewardModel : DeviceRewardModel;
+
+    type PendingWeeklyDoc = {
+      _id: Types.ObjectId;
+      miner_key?: string;
+      pendingWeekly: Array<{
+        amount: number;
+        asset_id: string;
+        unlock_at: Date;
+      }>;
+    };
+
+    const pipeline = [
+      {
+        $match: {
+          weekly_rewards: {
+            $elemMatch: {
+              status: 'pending',
+              unlock_at: { $lte: thirtyDaysAgo },
+            },
+          },
+        },
+      },
+      {
+        $project: {
+          miner_key: 1,
+          pendingWeekly: {
+            $filter: {
+              input: '$weekly_rewards',
+              as: 'wr',
+              cond: {
+                $and: [
+                  { $eq: ['$$wr.status', 'pending'] },
+                  { $lte: ['$$wr.unlock_at', thirtyDaysAgo] },
+                ],
+              },
+            },
+          },
+        },
+      },
+    ] as mongoose.PipelineStage[];
+
+    const cursor = Model.aggregate<PendingWeeklyDoc>(pipeline).cursor({ batchSize: 200 });
+
+    const toFixed2 = (value: number): number => Math.round(value * 100) / 100;
+
+    for await (const doc of cursor as AsyncIterable<PendingWeeklyDoc>) {
+      documentsExamined += 1;
+      const pendingEntries = doc.pendingWeekly ?? [];
+      if (!pendingEntries.length) {
+        continue;
+      }
+
       let delta = 0;
       let tfryDelta = 0;
-      let updatedCount = 0;
-      deviceReward.weekly_rewards.forEach(wr => {
-        if (wr.status === 'pending' && wr.unlock_at <= thirtyDaysAgo) {
-          wr.status = 'claimable';
-          delta += wr.amount;
-          if (isTfryAsset(wr.asset_id)) {
-            tfryDelta += wr.amount;
-          }
-          updatedCount++;
+      pendingEntries.forEach((entry) => {
+        const amount = Number(entry?.amount ?? 0);
+        if (!Number.isFinite(amount) || amount === 0) {
+          return;
+        }
+        delta = toFixed2(delta + amount);
+        if (isTfryAsset(entry?.asset_id)) {
+          tfryDelta = toFixed2(tfryDelta + amount);
         }
       });
-      if (updatedCount > 0) {
-        deviceReward.total_pending -= delta;
-        deviceReward.total_claimable += delta;
-        if (tfryDelta !== 0) {
-          const pendingBase = Number(deviceReward.tfry_pending ?? 0);
-          const claimableBase = Number(deviceReward.tfry_claimable ?? 0);
-          deviceReward.tfry_pending = Math.round((pendingBase - tfryDelta) * 100) / 100;
-          deviceReward.tfry_claimable = Math.round((claimableBase + tfryDelta) * 100) / 100;
-        }
-        deviceReward.last_updated = currentDate;
-        deviceReward.markModified?.('weekly_rewards');
-        await deviceReward.save();
-        totalUpdated += updatedCount;
-        logSection(`Weekly maturation: ${updatedCount} entries claimable for ${deviceReward.miner_key} (amount: ${delta})`);
+
+      const inc: Record<string, number> = {};
+      if (delta !== 0) {
+        inc.total_pending = toFixed2(-delta);
+        inc.total_claimable = toFixed2(delta);
+      }
+      if (tfryDelta !== 0) {
+        inc.tfry_pending = toFixed2(-tfryDelta);
+        inc.tfry_claimable = toFixed2(tfryDelta);
+      }
+
+      const updateDoc: Record<string, unknown> = {
+        $set: {
+          'weekly_rewards.$[wr].status': 'claimable',
+          last_updated: currentDate,
+        },
+      };
+      if (Object.keys(inc).length > 0) {
+        updateDoc.$inc = inc;
+      }
+
+      const result = await Model.updateOne(
+        {
+          _id: doc._id,
+          weekly_rewards: {
+            $elemMatch: {
+              status: 'pending',
+              unlock_at: { $lte: thirtyDaysAgo },
+            },
+          },
+        },
+        updateDoc,
+        {
+          arrayFilters: [
+            {
+              'wr.status': 'pending',
+              'wr.unlock_at': { $lte: thirtyDaysAgo },
+            },
+          ],
+        },
+      );
+
+      if (result.modifiedCount && result.modifiedCount > 0) {
+        documentsUpdated += 1;
+        totalEntriesUpdated += pendingEntries.length;
+        totalAmountShifted = toFixed2(totalAmountShifted + delta);
+        totalTfryShifted = toFixed2(totalTfryShifted + tfryDelta);
+        logSection(
+          `Weekly maturation: ${pendingEntries.length} entries claimable for ${doc.miner_key ?? doc._id.toHexString()} (amount: ${delta})`,
+        );
       }
     }
-    logSection(`Weekly rewards maturation completed: ${totalUpdated} entries updated`);
+
+    logSection(
+      `Weekly rewards maturation completed: docs=${documentsUpdated}/${documentsExamined}, entries=${totalEntriesUpdated}`,
+    );
+    await sendWeeklyMaturationReport('completed', {
+      documentsExamined,
+      documentsUpdated,
+      entriesUpdated: totalEntriesUpdated,
+      totalAmountShifted,
+      totalTfryShifted,
+      durationMs: Date.now() - startTime,
+    });
   } catch (err) {
     console.error('Weekly maturation job failed:', err);
+    await sendWeeklyMaturationReport('failed', {
+      documentsExamined,
+      documentsUpdated,
+      entriesUpdated: totalEntriesUpdated,
+      totalAmountShifted,
+      totalTfryShifted,
+      durationMs: Date.now() - startTime,
+      error: err instanceof Error ? err.message : String(err),
+    });
   }
 }
 
@@ -834,6 +950,8 @@ type WeeklyRollupMetrics = {
   weeklyEntriesCreated: number;
   duplicateEntriesSkipped: number;
   errors: number;
+  amountByAsset: Record<string, number>;
+  amountByDeviceType: Record<string, { fNode: number; tFry: number }>;
 };
 
 let weeklyIndexEnsured = false; // Cache flag so we only request index creation once per process
@@ -881,7 +999,7 @@ async function sendWeeklyRollupReport(
 ): Promise<void> {
   const { metrics } = summary;
   const totalProcessed = metrics.rewardedDevices + metrics.duplicateEntriesSkipped + metrics.errors;
-  const message = [
+  const messageLines = [
     `Window: ${summary.windowStart.toISOString()} → ${summary.windowEnd.toISOString()} (unlock ${summary.unlockAt.toISOString()})`,
     `Eligible devices: ${metrics.eligibleDevices}`,
     `Rewarded devices: ${metrics.rewardedDevices}`,
@@ -889,7 +1007,35 @@ async function sendWeeklyRollupReport(
     `Duplicate entries skipped: ${metrics.duplicateEntriesSkipped}`,
     `Errors: ${metrics.errors}`,
     `Duration: ${(summary.durationMs / 1000).toFixed(1)}s`,
-  ].join('\n');
+  ];
+
+  const amountEntries = Object.entries(metrics.amountByAsset ?? {});
+  if (amountEntries.length > 0) {
+    messageLines.push(
+      'Payout totals:',
+      ...amountEntries.map(([label, amount]) => `  • ${label}: ${amount.toFixed(2)}`),
+    );
+  }
+
+  const deviceBreakdownEntries = Object.entries(metrics.amountByDeviceType ?? {});
+  if (deviceBreakdownEntries.length > 0) {
+    messageLines.push('Totals per device type:');
+    deviceBreakdownEntries
+      .sort(([a], [b]) => a.localeCompare(b))
+      .forEach(([deviceType, amounts]) => {
+        const parts: string[] = [];
+        if (amounts.fNode) {
+          parts.push(`${amounts.fNode.toFixed(2)} fNode`);
+        }
+        if (amounts.tFry) {
+          parts.push(`${amounts.tFry.toFixed(2)} tFry`);
+        }
+        const line = parts.length > 0 ? parts.join(' | ') : '0';
+        messageLines.push(`  • ${deviceType}: ${line}`);
+      });
+  }
+
+  const message = messageLines.join('\n');
 
   const alertLevel = status === 'completed' ? 'INFO' : 'CRITICAL';
 
@@ -903,6 +1049,42 @@ async function sendWeeklyRollupReport(
     durationMs: summary.durationMs,
     errors: summary.errorMessages.slice(0, 5),
   }, { force: true });
+}
+
+type WeeklyMaturationSummary = {
+  documentsExamined: number;
+  documentsUpdated: number;
+  entriesUpdated: number;
+  totalAmountShifted: number;
+  totalTfryShifted: number;
+  durationMs: number;
+  error?: string;
+};
+
+async function sendWeeklyMaturationReport(
+  status: 'completed' | 'failed',
+  summary: WeeklyMaturationSummary,
+): Promise<void> {
+  const messageLines = [
+    `Documents examined: ${summary.documentsExamined}`,
+    `Documents updated: ${summary.documentsUpdated}`,
+    `Weekly entries flipped: ${summary.entriesUpdated}`,
+    `Total amount shifted: ${summary.totalAmountShifted.toFixed(2)}`,
+    `tFry amount shifted: ${summary.totalTfryShifted.toFixed(2)}`,
+    `Duration: ${(summary.durationMs / 1000).toFixed(1)}s`,
+  ];
+  if (summary.error) {
+    messageLines.push(`Error: ${summary.error}`);
+  }
+
+  const level = status === 'completed' ? 'INFO' : 'CRITICAL';
+  await alertingSystem.emit(
+    level,
+    `Weekly maturation ${status}`,
+    messageLines.join('\n'),
+    summary,
+    { force: true },
+  );
 }
 
 // NEW: Weekly roll-up (Friday 00:05 UTC)
@@ -1055,6 +1237,8 @@ export async function finalizeWeeklyRewards(): Promise<void> {
       weeklyEntriesCreated: 0,
       duplicateEntriesSkipped: 0,
       errors: 0,
+      amountByAsset: {},
+      amountByDeviceType: {},
     };
     const errorMessages: string[] = [];
     const startTime = Date.now();
@@ -1159,6 +1343,19 @@ export async function finalizeWeeklyRewards(): Promise<void> {
           if (res.modifiedCount && res.modifiedCount > 0) {
             metrics.rewardedDevices += 1;
             metrics.weeklyEntriesCreated += weeklyEntries.length;
+            const deviceType = getDeviceTypeFromMinerKey(doc.miner_key);
+            const deviceBucket =
+              metrics.amountByDeviceType[deviceType] ??
+              (metrics.amountByDeviceType[deviceType] = { fNode: 0, tFry: 0 });
+            weeklyEntries.forEach((entry) => {
+              const label = isTfryAsset(entry.asset_id) ? 'tFry' : 'fNode';
+              const amount = entry.amount ?? 0;
+              const current = metrics.amountByAsset[label] ?? 0;
+              const roundedAmount = Math.round(amount * 100) / 100;
+              metrics.amountByAsset[label] = Math.round((current + roundedAmount) * 100) / 100;
+              deviceBucket[label] =
+                Math.round((deviceBucket[label] + roundedAmount) * 100) / 100;
+            });
           } else {
             metrics.duplicateEntriesSkipped += weeklyEntries.length;
           }

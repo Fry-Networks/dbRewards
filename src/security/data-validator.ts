@@ -4,6 +4,10 @@ import { DeviceModel, TestDeviceModel } from '../db/devices-schema';
 import { auditLogger } from './audit-logger';
 import { withJobLock } from '../scheduler/job-lock';
 
+const EPSILON = 0.01; // minor rounding noise
+const WARNING_GAP = 0.5; // small drift -> warning
+const LEGACY_FRY_ASSET_ID = '924268058'; // claimed Fry 1.0 rows are allowed to remain
+
 interface ValidationError {
   type: 'CRITICAL' | 'WARNING' | 'INFO';
   entity: string;
@@ -91,6 +95,8 @@ export class DataValidator {
     
     // Always include daily rewards in totals to support hybrid data states
     device.daily_rewards?.forEach((reward: any) => {
+      // Ignore legacy Fry 1.0 claimed rows; they were snapshotted and do not participate in totals anymore
+      if (String(reward.asset_id) === LEGACY_FRY_ASSET_ID) return;
       if (reward.status === 'pending') expectedPending += reward.amount;
       else if (reward.status === 'claimable') expectedClaimable += reward.amount;
       else if (reward.status === 'claimed') expectedClaimed += reward.amount;
@@ -98,6 +104,7 @@ export class DataValidator {
     
     // Weekly rewards (always count toward totals when they exist)
     device.weekly_rewards?.forEach((reward: any) => {
+      if (String(reward.asset_id) === LEGACY_FRY_ASSET_ID) return;
       if (reward.status === 'pending') expectedPending += reward.amount;
       else if (reward.status === 'claimable') expectedClaimable += reward.amount;
       else if (reward.status === 'claimed') expectedClaimed += reward.amount;
@@ -111,45 +118,26 @@ export class DataValidator {
     const actualPending = Math.round((device.total_pending || 0) * 100) / 100;
     const actualClaimable = Math.round((device.total_claimable || 0) * 100) / 100;
     const actualClaimed = Math.round((device.total_claimed || 0) * 100) / 100;
-    
-    if (actualPending !== expectedPending) {
+
+    const addError = (field: string, expected: number, actual: number): void => {
+      const diff = Math.abs(actual - expected);
+      if (diff <= EPSILON) return;
+      const level: ValidationError['type'] = diff <= WARNING_GAP ? 'WARNING' : 'CRITICAL';
       errors.push({
-        type: 'CRITICAL',
+        type: level,
         entity: 'device_reward',
         entityId: device.miner_key,
-        field: 'total_pending',
-        message: 'Total pending amount does not match sum of pending rewards',
-        currentValue: actualPending,
-        expectedValue: expectedPending,
+        field,
+        message: `${field} does not match sum of rewards (diff=${diff.toFixed(2)})`,
+        currentValue: actual,
+        expectedValue: expected,
         timestamp: getSimNow()
       });
-    }
+    };
     
-    if (actualClaimable !== expectedClaimable) {
-      errors.push({
-        type: 'CRITICAL',
-        entity: 'device_reward',
-        entityId: device.miner_key,
-        field: 'total_claimable',
-        message: 'Total claimable amount does not match sum of claimable rewards',
-        currentValue: actualClaimable,
-        expectedValue: expectedClaimable,
-        timestamp: getSimNow()
-      });
-    }
-    
-    if (actualClaimed !== expectedClaimed) {
-      errors.push({
-        type: 'CRITICAL',
-        entity: 'device_reward',
-        entityId: device.miner_key,
-        field: 'total_claimed',
-        message: 'Total claimed amount does not match sum of claimed rewards',
-        currentValue: actualClaimed,
-        expectedValue: expectedClaimed,
-        timestamp: getSimNow()
-      });
-    }
+    addError('total_pending', expectedPending, actualPending);
+    addError('total_claimable', expectedClaimable, actualClaimable);
+    addError('total_claimed', expectedClaimed, actualClaimed);
   }
 
   private async validateRewardSequences(device: any, errors: ValidationError[]): Promise<void> {

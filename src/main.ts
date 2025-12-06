@@ -1,4 +1,5 @@
 import path from "path";
+import fs from "fs";
 import { connect, getConnection } from "./db/connect";
 import { Device, DeviceModel, TestDeviceModel } from "./db/devices-schema";
 import "dotenv/config";
@@ -22,7 +23,7 @@ import { backupManager } from "./security/backup-manager";
 import { dataValidator } from "./security/data-validator";
 import { logSection } from "./logger";
 import { withJobLock } from "./scheduler/job-lock";
-import { applyTfryDelta, isTfryAsset, TFRY_ASSET_ID } from "./reward-totals";
+import { applyTfryDelta, getRewardAssetLabel, isTfryAsset, TFRY_ASSET_ID } from "./reward-totals";
 
 const testMode = process.env.TEST_MODE
   ? process.env.TEST_MODE === "true"
@@ -203,10 +204,164 @@ type HourlyRunResult = {
 const DEVICE_FIELDS_FOR_REWARDS =
   '_id miner_key is_registered reward_wallet verified staked registration node byod rewards_exception hardware created_at reward_multiplier timezone mac_addresses addresses exception_flags last_reward_date last_updated type device_type';
 
+type AssetSummary = {
+  amount: number;
+  devices: number;
+  rewards: number;
+};
+
+type DeviceTypeSummary = {
+  totalAmount: number;
+  totalRewards: number;
+  devices: number;
+  assets: Record<string, AssetSummary>;
+};
+
+const roundToTwo = (value: number): number => {
+  const rounded = Math.round(value * 100) / 100;
+  return Object.is(rounded, -0) ? 0 : rounded;
+};
+
+type AssetAggregationState = {
+  amount: number;
+  rewards: number;
+  devices: Set<string>;
+};
+
+type DeviceTypeAggregationState = {
+  totalAmount: number;
+  totalRewards: number;
+  devices: Set<string>;
+  assets: Map<string, AssetAggregationState>;
+};
+
+function ensureAssetAggregationState(
+  map: Map<string, AssetAggregationState>,
+  key: string,
+): AssetAggregationState {
+  let state = map.get(key);
+  if (!state) {
+    state = { amount: 0, rewards: 0, devices: new Set<string>() };
+    map.set(key, state);
+  }
+  return state;
+}
+
+function ensureDeviceTypeAggregationState(
+  map: Map<string, DeviceTypeAggregationState>,
+  key: string,
+): DeviceTypeAggregationState {
+  let state = map.get(key);
+  if (!state) {
+    state = {
+      totalAmount: 0,
+      totalRewards: 0,
+      devices: new Set<string>(),
+      assets: new Map<string, AssetAggregationState>(),
+    };
+    map.set(key, state);
+  }
+  return state;
+}
+
+function buildAssetSummary(
+  aggregates: Map<string, AssetAggregationState>,
+): Record<string, AssetSummary> {
+  const summary: Record<string, AssetSummary> = {};
+  for (const [asset, state] of aggregates.entries()) {
+    summary[asset] = {
+      amount: roundToTwo(state.amount),
+      devices: state.devices.size,
+      rewards: state.rewards,
+    };
+  }
+  return summary;
+}
+
+function buildDeviceTypeSummary(
+  aggregates: Map<string, DeviceTypeAggregationState>,
+): Record<string, DeviceTypeSummary> {
+  const summary: Record<string, DeviceTypeSummary> = {};
+  for (const [deviceType, state] of aggregates.entries()) {
+    const assetSummary: Record<string, AssetSummary> = {};
+    for (const [assetKey, assetState] of state.assets.entries()) {
+      assetSummary[assetKey] = {
+        amount: roundToTwo(assetState.amount),
+        devices: assetState.devices.size,
+        rewards: assetState.rewards,
+      };
+    }
+    summary[deviceType] = {
+      totalAmount: roundToTwo(state.totalAmount),
+      totalRewards: state.totalRewards,
+      devices: state.devices.size,
+      assets: assetSummary,
+    };
+  }
+  return summary;
+}
+
+function formatAssetLabel(label: string): string {
+  return label.startsWith('asset:') ? `asset ${label.slice(6)}` : label;
+}
+
+function withAssetBaseline(
+  assets: Record<string, AssetSummary> | undefined,
+): Record<string, AssetSummary> {
+  const result: Record<string, AssetSummary> = { ...(assets ?? {}) };
+  const ensure = (key: string): void => {
+    if (!result[key]) {
+      result[key] = { amount: 0, devices: 0, rewards: 0 };
+    }
+  };
+  ensure('fNode');
+  ensure('tFry');
+  return result;
+}
+
+async function writeReportFile(subdir: string, fileName: string, payload: unknown): Promise<string | null> {
+  try {
+    const dir = path.resolve(process.cwd(), 'logs', subdir);
+    await fs.promises.mkdir(dir, { recursive: true });
+    const safeName = fileName.replace(/[^a-zA-Z0-9_.-]/g, '-');
+    const fullPath = path.join(dir, safeName);
+    await fs.promises.writeFile(fullPath, JSON.stringify(payload, null, 2), 'utf8');
+    return fullPath;
+  } catch (err) {
+    console.error('Failed to write report file', err);
+    return null;
+  }
+}
+
+function toDiscordMessage(lines: string[], overflowNote: string): string {
+  const limit = 1900; // keep a buffer under 2k
+  let joined = lines.join('\n');
+  if (joined.length <= limit) return joined;
+
+  const trimmed: string[] = [];
+  let used = 0;
+  for (const line of lines) {
+    const nextLen = used + line.length + 1;
+    if (nextLen > limit - overflowNote.length - 5) break;
+    trimmed.push(line);
+    used = nextLen;
+  }
+  trimmed.push(overflowNote);
+  return trimmed.join('\n');
+}
+
 function getDeviceTypeFromMinerKey(minerKey?: string): string {
   if (!minerKey) return 'UNKNOWN';
   const prefix = minerKey.split('-')[0]?.trim().toUpperCase();
   return prefix && prefix.length > 0 ? prefix : 'UNKNOWN';
+}
+
+function shortMinerKey(minerKey?: string): string {
+  if (!minerKey) return 'UNKNOWN';
+  const parts = minerKey.split('-');
+  const prefix = parts[0]?.toUpperCase() ?? 'UNKNOWN';
+  const tail = (parts[1] ?? '').slice(0, 4).toUpperCase();
+  return tail ? `${prefix}-${tail}` : prefix;
 }
 
 async function loadRegisteredDevices(): Promise<Device[]> {
@@ -798,6 +953,8 @@ export async function updateWeeklyPendingStatuses(): Promise<void> {
   let totalEntriesUpdated = 0;
   let totalAmountShifted = 0;
   let totalTfryShifted = 0;
+  const assetAggregates = new Map<string, AssetAggregationState>();
+  const deviceTypeAggregates = new Map<string, DeviceTypeAggregationState>();
 
   try {
     const Model = testMode ? TestDeviceRewardModel : DeviceRewardModel;
@@ -844,7 +1001,7 @@ export async function updateWeeklyPendingStatuses(): Promise<void> {
 
     const cursor = Model.aggregate<PendingWeeklyDoc>(pipeline).cursor({ batchSize: 200 });
 
-    const toFixed2 = (value: number): number => Math.round(value * 100) / 100;
+    const toFixed2 = (value: number): number => roundToTwo(value);
 
     for await (const doc of cursor as AsyncIterable<PendingWeeklyDoc>) {
       documentsExamined += 1;
@@ -855,15 +1012,19 @@ export async function updateWeeklyPendingStatuses(): Promise<void> {
 
       let delta = 0;
       let tfryDelta = 0;
+      const maturedEntries: Array<{ assetLabel: string; amount: number }> = [];
       pendingEntries.forEach((entry) => {
-        const amount = Number(entry?.amount ?? 0);
-        if (!Number.isFinite(amount) || amount === 0) {
+        const amountRaw = Number(entry?.amount ?? 0);
+        if (!Number.isFinite(amountRaw)) {
           return;
         }
-        delta = toFixed2(delta + amount);
-        if (isTfryAsset(entry?.asset_id)) {
-          tfryDelta = toFixed2(tfryDelta + amount);
+        const roundedAmount = toFixed2(amountRaw);
+        delta = toFixed2(delta + roundedAmount);
+        const assetLabel = getRewardAssetLabel(entry?.asset_id);
+        if (assetLabel === 'tFry') {
+          tfryDelta = toFixed2(tfryDelta + roundedAmount);
         }
+        maturedEntries.push({ assetLabel, amount: roundedAmount });
       });
 
       const inc: Record<string, number> = {};
@@ -912,15 +1073,33 @@ export async function updateWeeklyPendingStatuses(): Promise<void> {
         totalEntriesUpdated += pendingEntries.length;
         totalAmountShifted = toFixed2(totalAmountShifted + delta);
         totalTfryShifted = toFixed2(totalTfryShifted + tfryDelta);
-        logSection(
-          `Weekly maturation: ${pendingEntries.length} entries claimable for ${doc.miner_key ?? doc._id.toHexString()} (amount: ${delta})`,
-        );
+        const deviceId =
+          doc._id instanceof Types.ObjectId ? doc._id.toHexString() : String(doc._id);
+        const deviceType = getDeviceTypeFromMinerKey(doc.miner_key);
+        const deviceTypeState = ensureDeviceTypeAggregationState(deviceTypeAggregates, deviceType);
+        deviceTypeState.devices.add(deviceId);
+        maturedEntries.forEach(({ assetLabel, amount }) => {
+          const globalAssetState = ensureAssetAggregationState(assetAggregates, assetLabel);
+          globalAssetState.amount = toFixed2(globalAssetState.amount + amount);
+          globalAssetState.rewards += 1;
+          globalAssetState.devices.add(deviceId);
+
+          deviceTypeState.totalAmount = toFixed2(deviceTypeState.totalAmount + amount);
+          deviceTypeState.totalRewards += 1;
+
+          const deviceTypeAssetState = ensureAssetAggregationState(deviceTypeState.assets, assetLabel);
+          deviceTypeAssetState.amount = toFixed2(deviceTypeAssetState.amount + amount);
+          deviceTypeAssetState.rewards += 1;
+          deviceTypeAssetState.devices.add(deviceId);
+        });
       }
     }
 
     logSection(
       `Weekly rewards maturation completed: docs=${documentsUpdated}/${documentsExamined}, entries=${totalEntriesUpdated}`,
     );
+    const amountByAsset = buildAssetSummary(assetAggregates);
+    const deviceTypeSummary = buildDeviceTypeSummary(deviceTypeAggregates);
     await sendWeeklyMaturationReport('completed', {
       documentsExamined,
       documentsUpdated,
@@ -928,9 +1107,13 @@ export async function updateWeeklyPendingStatuses(): Promise<void> {
       totalAmountShifted,
       totalTfryShifted,
       durationMs: Date.now() - startTime,
+      amountByAsset,
+      deviceTypeSummary,
     });
   } catch (err) {
     console.error('Weekly maturation job failed:', err);
+    const amountByAsset = buildAssetSummary(assetAggregates);
+    const deviceTypeSummary = buildDeviceTypeSummary(deviceTypeAggregates);
     await sendWeeklyMaturationReport('failed', {
       documentsExamined,
       documentsUpdated,
@@ -938,6 +1121,8 @@ export async function updateWeeklyPendingStatuses(): Promise<void> {
       totalAmountShifted,
       totalTfryShifted,
       durationMs: Date.now() - startTime,
+      amountByAsset,
+      deviceTypeSummary,
       error: err instanceof Error ? err.message : String(err),
     });
   }
@@ -950,8 +1135,8 @@ type WeeklyRollupMetrics = {
   weeklyEntriesCreated: number;
   duplicateEntriesSkipped: number;
   errors: number;
-  amountByAsset: Record<string, number>;
-  amountByDeviceType: Record<string, { fNode: number; tFry: number }>;
+  amountByAsset: Record<string, AssetSummary>;
+  deviceTypeSummary: Record<string, DeviceTypeSummary>;
 };
 
 let weeklyIndexEnsured = false; // Cache flag so we only request index creation once per process
@@ -997,7 +1182,15 @@ async function sendWeeklyRollupReport(
     errorMessages: string[];
   },
 ): Promise<void> {
-  const { metrics } = summary;
+  const logPath = await writeReportFile(
+    'weekly-rollup',
+    `${summary.jobKey}.json`,
+    summary,
+  );
+  const metrics = {
+    ...summary.metrics,
+    amountByAsset: withAssetBaseline(summary.metrics.amountByAsset),
+  };
   const totalProcessed = metrics.rewardedDevices + metrics.duplicateEntriesSkipped + metrics.errors;
   const messageLines = [
     `Window: ${summary.windowStart.toISOString()} → ${summary.windowEnd.toISOString()} (unlock ${summary.unlockAt.toISOString()})`,
@@ -1011,31 +1204,45 @@ async function sendWeeklyRollupReport(
 
   const amountEntries = Object.entries(metrics.amountByAsset ?? {});
   if (amountEntries.length > 0) {
-    messageLines.push(
-      'Payout totals:',
-      ...amountEntries.map(([label, amount]) => `  • ${label}: ${amount.toFixed(2)}`),
-    );
+    messageLines.push('Payout totals:');
+    amountEntries
+      .sort(([a], [b]) => a.localeCompare(b))
+      .forEach(([label, summaryValue]) => {
+        const amountLine = `${summaryValue.amount.toFixed(2)} (${summaryValue.devices} devices / ${summaryValue.rewards} rewards)`;
+        messageLines.push(`  • ${formatAssetLabel(label)}: ${amountLine}`);
+      });
   }
 
-  const deviceBreakdownEntries = Object.entries(metrics.amountByDeviceType ?? {});
+  const deviceBreakdownEntries = Object.entries(metrics.deviceTypeSummary ?? {});
   if (deviceBreakdownEntries.length > 0) {
     messageLines.push('Totals per device type:');
     deviceBreakdownEntries
       .sort(([a], [b]) => a.localeCompare(b))
-      .forEach(([deviceType, amounts]) => {
-        const parts: string[] = [];
-        if (amounts.fNode) {
-          parts.push(`${amounts.fNode.toFixed(2)} fNode`);
-        }
-        if (amounts.tFry) {
-          parts.push(`${amounts.tFry.toFixed(2)} tFry`);
-        }
-        const line = parts.length > 0 ? parts.join(' | ') : '0';
-        messageLines.push(`  • ${deviceType}: ${line}`);
+      .forEach(([deviceType, summaryValue]) => {
+        messageLines.push(
+          `  • ${deviceType}: total ${summaryValue.totalAmount.toFixed(2)} across ${summaryValue.devices} devices (${summaryValue.totalRewards} rewards)`,
+        );
+        const assetBreakdown = Object.entries(summaryValue.assets ?? {});
+        assetBreakdown
+          .sort(([a], [b]) => a.localeCompare(b))
+          .forEach(([assetLabel, assetSummary]) => {
+            messageLines.push(
+              `      - ${formatAssetLabel(assetLabel)}: ${assetSummary.amount.toFixed(2)} (${assetSummary.devices} devices / ${assetSummary.rewards} rewards)`,
+            );
+          });
       });
   }
 
-  const message = messageLines.join('\n');
+  if (logPath) {
+    messageLines.push(`Full payload: ${path.relative(process.cwd(), logPath)}`);
+  }
+
+  const message = toDiscordMessage(
+    messageLines,
+    logPath
+      ? `…truncated; full payload: ${path.relative(process.cwd(), logPath)}`
+      : '…truncated; full payload written to logs.',
+  );
 
   const alertLevel = status === 'completed' ? 'INFO' : 'CRITICAL';
 
@@ -1058,6 +1265,8 @@ type WeeklyMaturationSummary = {
   totalAmountShifted: number;
   totalTfryShifted: number;
   durationMs: number;
+  amountByAsset: Record<string, AssetSummary>;
+  deviceTypeSummary: Record<string, DeviceTypeSummary>;
   error?: string;
 };
 
@@ -1065,24 +1274,75 @@ async function sendWeeklyMaturationReport(
   status: 'completed' | 'failed',
   summary: WeeklyMaturationSummary,
 ): Promise<void> {
+  const logPath = await writeReportFile(
+    'weekly-maturation',
+    `weekly-maturation-${new Date().toISOString()}.json`,
+    summary,
+  );
+  const amountByAsset = withAssetBaseline(summary.amountByAsset);
   const messageLines = [
     `Documents examined: ${summary.documentsExamined}`,
     `Documents updated: ${summary.documentsUpdated}`,
     `Weekly entries flipped: ${summary.entriesUpdated}`,
     `Total amount shifted: ${summary.totalAmountShifted.toFixed(2)}`,
-    `tFry amount shifted: ${summary.totalTfryShifted.toFixed(2)}`,
     `Duration: ${(summary.durationMs / 1000).toFixed(1)}s`,
   ];
+  const amountEntries = Object.entries(amountByAsset ?? {});
+  if (amountEntries.length > 0) {
+    messageLines.push('Amount shifted by asset:');
+    amountEntries
+      .sort(([a], [b]) => a.localeCompare(b))
+      .forEach(([label, assetSummary]) => {
+        messageLines.push(
+          `  • ${formatAssetLabel(label)}: ${assetSummary.amount.toFixed(2)} (${assetSummary.devices} devices / ${assetSummary.rewards} rewards)`,
+        );
+      });
+  }
+
+  const deviceBreakdownEntries = Object.entries(summary.deviceTypeSummary ?? {});
+  if (deviceBreakdownEntries.length > 0) {
+    messageLines.push('Totals per device type:');
+    deviceBreakdownEntries
+      .sort(([a], [b]) => a.localeCompare(b))
+      .forEach(([deviceType, deviceSummary]) => {
+        messageLines.push(
+          `  • ${deviceType}: total ${deviceSummary.totalAmount.toFixed(2)} across ${deviceSummary.devices} devices (${deviceSummary.totalRewards} rewards)`,
+        );
+        const assetBreakdown = Object.entries(deviceSummary.assets ?? {});
+        assetBreakdown
+          .sort(([a], [b]) => a.localeCompare(b))
+          .forEach(([assetLabel, assetSummary]) => {
+            messageLines.push(
+              `      - ${formatAssetLabel(assetLabel)}: ${assetSummary.amount.toFixed(2)} (${assetSummary.devices} devices / ${assetSummary.rewards} rewards)`,
+            );
+          });
+      });
+  }
+
   if (summary.error) {
     messageLines.push(`Error: ${summary.error}`);
   }
+
+  if (logPath) {
+    messageLines.push(`Full payload: ${path.relative(process.cwd(), logPath)}`);
+  }
+
+  const message = toDiscordMessage(
+    messageLines,
+    logPath
+      ? `…truncated; full payload: ${path.relative(process.cwd(), logPath)}`
+      : '…truncated; full payload written to logs.',
+  );
 
   const level = status === 'completed' ? 'INFO' : 'CRITICAL';
   await alertingSystem.emit(
     level,
     `Weekly maturation ${status}`,
-    messageLines.join('\n'),
-    summary,
+    message,
+    {
+      ...summary,
+      amountByAsset,
+    },
     { force: true },
   );
 }
@@ -1149,6 +1409,8 @@ export async function finalizeWeeklyRewards(): Promise<void> {
             'metrics.weekly_entries_created': 0,
             'metrics.duplicate_entries_skipped': 0,
             'metrics.errors': 0,
+            'metrics.amount_by_asset': {},
+            'metrics.device_type_summary': {},
             error_messages: [],
           },
         },
@@ -1238,8 +1500,10 @@ export async function finalizeWeeklyRewards(): Promise<void> {
       duplicateEntriesSkipped: 0,
       errors: 0,
       amountByAsset: {},
-      amountByDeviceType: {},
+      deviceTypeSummary: {},
     };
+    const assetAggregates = new Map<string, AssetAggregationState>();
+    const deviceTypeAggregates = new Map<string, DeviceTypeAggregationState>();
     const errorMessages: string[] = [];
     const startTime = Date.now();
 
@@ -1344,17 +1608,26 @@ export async function finalizeWeeklyRewards(): Promise<void> {
             metrics.rewardedDevices += 1;
             metrics.weeklyEntriesCreated += weeklyEntries.length;
             const deviceType = getDeviceTypeFromMinerKey(doc.miner_key);
-            const deviceBucket =
-              metrics.amountByDeviceType[deviceType] ??
-              (metrics.amountByDeviceType[deviceType] = { fNode: 0, tFry: 0 });
+            const deviceId =
+              doc._id instanceof Types.ObjectId ? doc._id.toHexString() : String(doc._id);
+            const deviceTypeState = ensureDeviceTypeAggregationState(deviceTypeAggregates, deviceType);
+            deviceTypeState.devices.add(deviceId);
             weeklyEntries.forEach((entry) => {
-              const label = isTfryAsset(entry.asset_id) ? 'tFry' : 'fNode';
-              const amount = entry.amount ?? 0;
-              const current = metrics.amountByAsset[label] ?? 0;
-              const roundedAmount = Math.round(amount * 100) / 100;
-              metrics.amountByAsset[label] = Math.round((current + roundedAmount) * 100) / 100;
-              deviceBucket[label] =
-                Math.round((deviceBucket[label] + roundedAmount) * 100) / 100;
+              const label = getRewardAssetLabel(entry.asset_id);
+              const roundedAmount = roundToTwo(entry.amount ?? 0);
+
+              const globalAssetState = ensureAssetAggregationState(assetAggregates, label);
+              globalAssetState.amount = roundToTwo(globalAssetState.amount + roundedAmount);
+              globalAssetState.rewards += 1;
+              globalAssetState.devices.add(deviceId);
+
+              deviceTypeState.totalAmount = roundToTwo(deviceTypeState.totalAmount + roundedAmount);
+              deviceTypeState.totalRewards += 1;
+
+              const deviceTypeAssetState = ensureAssetAggregationState(deviceTypeState.assets, label);
+              deviceTypeAssetState.amount = roundToTwo(deviceTypeAssetState.amount + roundedAmount);
+              deviceTypeAssetState.rewards += 1;
+              deviceTypeAssetState.devices.add(deviceId);
             });
           } else {
             metrics.duplicateEntriesSkipped += weeklyEntries.length;
@@ -1376,6 +1649,8 @@ export async function finalizeWeeklyRewards(): Promise<void> {
       }
 
       const finishTime = getSimNow();
+      metrics.amountByAsset = buildAssetSummary(assetAggregates);
+      metrics.deviceTypeSummary = buildDeviceTypeSummary(deviceTypeAggregates);
       const status: 'completed' | 'failed' = metrics.errors > 0 ? 'failed' : 'completed';
 
       if (!jobRun?._id) {
@@ -1394,6 +1669,8 @@ export async function finalizeWeeklyRewards(): Promise<void> {
             'metrics.weekly_entries_created': metrics.weeklyEntriesCreated,
             'metrics.duplicate_entries_skipped': metrics.duplicateEntriesSkipped,
             'metrics.errors': metrics.errors,
+            'metrics.amount_by_asset': metrics.amountByAsset,
+            'metrics.device_type_summary': metrics.deviceTypeSummary,
             error_messages: errorMessages.slice(0, 20),
           },
         },
@@ -1423,6 +1700,8 @@ export async function finalizeWeeklyRewards(): Promise<void> {
       const errorMessage = err instanceof Error ? err.message : String(err);
       errorMessages.push(errorMessage);
       const finishTime = getSimNow();
+      metrics.amountByAsset = buildAssetSummary(assetAggregates);
+      metrics.deviceTypeSummary = buildDeviceTypeSummary(deviceTypeAggregates);
       if (!jobRun?._id) {
         console.error('Weekly roll-up failed but job record missing. Error:', err);
         return;
@@ -1439,6 +1718,8 @@ export async function finalizeWeeklyRewards(): Promise<void> {
             'metrics.weekly_entries_created': metrics.weeklyEntriesCreated,
             'metrics.duplicate_entries_skipped': metrics.duplicateEntriesSkipped,
             'metrics.errors': metrics.errors,
+            'metrics.amount_by_asset': metrics.amountByAsset,
+            'metrics.device_type_summary': metrics.deviceTypeSummary,
           },
           $push: { error_messages: errorMessage },
         },

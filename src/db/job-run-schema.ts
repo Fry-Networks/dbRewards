@@ -12,6 +12,8 @@ const jobRunMetricsSchema = new mongoose.Schema(
     weekly_entries_created: { type: Number, default: 0 },
     duplicate_entries_skipped: { type: Number, default: 0 },
     errors: { type: Number, default: 0 },
+    amount_by_asset: { type: mongoose.Schema.Types.Mixed, default: {} },
+    device_type_summary: { type: mongoose.Schema.Types.Mixed, default: {} },
   },
   { _id: false, suppressReservedKeysWarning: true },
 );
@@ -59,6 +61,8 @@ export interface JobRun extends mongoose.Document {
     weekly_entries_created: number;
     duplicate_entries_skipped: number;
     errors: number;
+    amount_by_asset?: Record<string, unknown>;
+    device_type_summary?: Record<string, unknown>;
   };
   error_messages: string[];
   notes?: string;

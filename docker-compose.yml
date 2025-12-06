@@ -97,7 +97,7 @@ services:
       TEST_MODE: "false"
       DEBUG: "false"
       TIME_ACCEL: 32
-      SIM_START_AT: "2025-10-31T22:00:00Z"
+      SIM_START_AT: "2025-11-11T00:00:00Z"
       ALERTS_ENABLED: "false"
       DASHBOARD_PORT: 30032
       MATURATION_ENABLED: "true"
@@ -145,9 +145,9 @@ services:
       NODE_OPTIONS: "--max-old-space-size=4096"
       WEEKLY_REWARDS_ENABLED: "true"
       NEXT_PUBLIC_WEEKLY_REWARDS_ENABLED: "true"
-      SIMULATION_ENABLED: "true"
-      TIME_ACCEL: 32
-      SIM_START_AT: "2025-10-31T22:00:00Z"
+      SIMULATION_ENABLED: "false"
+      TIME_ACCEL: 4
+      SIM_START_AT: "2025-11-09T04:00:00Z"
       TEST_MODE: "false"
       DEBUG: "false"
       ALERTS_ENABLED: "false"

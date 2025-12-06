@@ -1,5 +1,6 @@
-export const LEGACY_FRY_ASSET_ID = '924268058';
 export const TFRY_ASSET_ID = '2681521901';
+export const FNODE_ASSET_ID = '2485202024';
+export const FRY20_ASSET_ID = '2485314946';
 
 export type TfryDelta = {
   pending?: number;
@@ -10,6 +11,23 @@ export type TfryDelta = {
 
 export function isTfryAsset(assetId: unknown): boolean {
   return typeof assetId === 'string' && assetId === TFRY_ASSET_ID;
+}
+
+export function isFnodeAsset(assetId: unknown): boolean {
+  return typeof assetId === 'string' && assetId === FNODE_ASSET_ID;
+}
+
+export function getRewardAssetLabel(assetId: unknown): string {
+  if (typeof assetId === 'string') {
+    if (assetId === TFRY_ASSET_ID) return 'tFry';
+    if (assetId === FNODE_ASSET_ID) return 'fNode';
+    if (assetId === FRY20_ASSET_ID) return 'FRY20';
+    return `asset:${assetId}`;
+  }
+  if (typeof assetId === 'number' && Number.isFinite(assetId)) {
+    return getRewardAssetLabel(String(assetId));
+  }
+  return 'asset:unknown';
 }
 
 export function applyTfryDelta(target: Record<string, number>, delta: TfryDelta): void {

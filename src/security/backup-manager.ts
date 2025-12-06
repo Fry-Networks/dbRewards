@@ -1,6 +1,7 @@
 import fs from 'fs/promises';
 import { constants as fsConstants } from 'fs';
 import path from 'path';
+import os from 'os';
 import { getSimNow } from '../time-control';
 import { DeviceRewardModel, TestDeviceRewardModel } from '../db/device-rewards-schema';
 import { DeviceModel, TestDeviceModel } from '../db/devices-schema';
@@ -16,16 +17,18 @@ interface BackupMetadata {
 }
 
 export class BackupManager {
-  private readonly backupRoot: string;
-  private readonly backupDir: string;
-  private readonly legacyBackupDir: string;
+  private backupRoot: string;
+  private backupDir: string;
   private readonly retentionDays = 7;
   private readonly testMode = process.env.TEST_MODE === 'true';
   
   constructor() {
-    this.backupRoot = path.join(process.cwd(), 'backups');
-    this.backupDir = path.join(this.backupRoot, 'csv');
-    this.legacyBackupDir = path.join(process.cwd(), '.backups', 'csv');
+    // Allow override of backup location; default to cwd/backups, with fallback to /tmp if not writable
+    const preferredRoot = process.env.BACKUP_DIR
+      ? path.resolve(process.env.BACKUP_DIR)
+      : path.join(process.cwd(), 'backups');
+    this.backupRoot = preferredRoot;
+    this.backupDir = path.join(preferredRoot, 'csv');
     this.ensureBackupDirectory();
     this.scheduleCleanup();
   }
@@ -33,36 +36,18 @@ export class BackupManager {
   private async ensureBackupDirectory(): Promise<void> {
     try {
       await fs.mkdir(this.backupDir, { recursive: true });
-      await this.migrateLegacyBackups();
     } catch (error) {
-      console.error('Failed to create backup directory:', error);
-    }
-  }
-
-  private async migrateLegacyBackups(): Promise<void> {
-    try {
-      const legacyStats = await fs.stat(this.legacyBackupDir);
-      if (!legacyStats.isDirectory()) return;
-
-      const files = await fs.readdir(this.legacyBackupDir);
-      if (files.length === 0) return;
-
-      console.log(`📁 Migrating legacy backup files from ${this.legacyBackupDir} → ${this.backupDir}`);
-      await fs.mkdir(this.backupDir, { recursive: true });
-
-      for (const file of files) {
-        const source = path.join(this.legacyBackupDir, file);
-        const destination = path.join(this.backupDir, file);
-        try {
-          await fs.access(destination, fsConstants.F_OK);
-          // Destination already exists; skip to avoid overwriting.
-          continue;
-        } catch {
-          await fs.rename(source, destination);
-        }
+      console.error('Failed to create backup directory at preferred location:', error);
+      // Fallback to tmp to avoid hard failures due to permissions
+      const fallbackRoot = path.join(os.tmpdir(), 'dbrewards-backups');
+      this.backupRoot = fallbackRoot;
+      this.backupDir = path.join(fallbackRoot, 'csv');
+      try {
+        await fs.mkdir(this.backupDir, { recursive: true });
+        console.warn(`Using fallback backup directory: ${this.backupDir}`);
+      } catch (fallbackError) {
+        console.error('Failed to create fallback backup directory:', fallbackError);
       }
-    } catch {
-      // Ignore if legacy directory does not exist.
     }
   }
 

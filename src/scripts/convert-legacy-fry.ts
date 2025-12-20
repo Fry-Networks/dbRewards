@@ -35,9 +35,8 @@ import { DeviceModel } from '../db/devices-schema';
 import { DeviceRewardModel, type DeviceReward } from '../db/device-rewards-schema';
 import { ProductModel, type Product } from '../db/products-schema';
 import { getSimNow } from '../time-control';
+import { LEGACY_FRY_ASSET_ID, TFRY_ASSET_ID } from '../reward-totals';
 
-const LEGACY_FRY_ASSET_ID = '924268058';
-const TFRY_ASSET_ID = '2681521901';
 const DAY_MS = 24 * 60 * 60 * 1000;
 
 const DAILY_STATUSES_TO_CONVERT = new Set<DeviceReward['daily_rewards'][number]['status']>([

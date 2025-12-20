@@ -90,6 +90,27 @@ async function runDailyMaturationOnce(): Promise<void> {
                 in: '$$r.amount'
               }
             }
+          },
+          tfryAmountToFlip: {
+            $sum: {
+              $map: {
+                input: {
+                  $filter: {
+                    input: '$daily_rewards',
+                    as: 'r',
+                    cond: {
+                      $and: [
+                        { $eq: ['$$r.status', 'pending'] },
+                        { $lte: ['$$r.created_at', thirtyDaysAgo] },
+                        { $eq: ['$$r.asset_id', TFRY_ASSET_ID] }
+                      ]
+                    }
+                  }
+                },
+                as: 'r',
+                in: '$$r.amount'
+              }
+            }
           }
         }
       }
@@ -101,11 +122,21 @@ async function runDailyMaturationOnce(): Promise<void> {
     for await (const doc of cursor as AsyncIterable<PendingFlipDoc>) {
       const amount = Number(doc.amountToFlip || 0);
       if (amount <= 0) continue;
+      const tfryAmount = Number(doc.tfryAmountToFlip || 0);
+      const otherAmount = Math.round((amount - tfryAmount) * 100) / 100;
+      const inc: Record<string, number> = {};
+      if (otherAmount !== 0) {
+        inc.total_pending = -otherAmount;
+        inc.total_claimable = otherAmount;
+      }
+      if (tfryAmount !== 0) {
+        applyTfryDelta(inc, { pending: -tfryAmount, claimable: tfryAmount });
+      }
       const upd = await Model.updateOne(
         { _id: doc._id },
         {
           $set: { 'daily_rewards.$[elem].status': 'claimable', last_updated: now },
-          $inc: { total_pending: -amount, total_claimable: amount }
+          $inc: inc
         },
         { arrayFilters: [ { 'elem.status': 'pending', 'elem.created_at': { $lte: thirtyDaysAgo } } ] }
       );

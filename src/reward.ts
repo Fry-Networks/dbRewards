@@ -460,36 +460,52 @@ const pendingManage = async (
   if (!DAILY_MATURATION_ENABLED) return true;
   const currentDate = getSimNow();
   const thirtyDaysAgo = new Date(currentDate.getTime() - 30 * 24 * 60 * 60 * 1000);
-  
+
   DEBUG && console.log(`Managing device reward statuses for ${device.miner_key}`);
 
   try {
     // Find the device reward document
     const deviceReward: DeviceReward | null = await (testMode ? TestDeviceRewardModel : DeviceRewardModel)
       .findOne({ miner_key: device.miner_key });
-    
+
     if (!deviceReward) {
       DEBUG && console.log(`No device rewards found for ${device.miner_key}`);
       return true; // No device rewards yet, nothing to update
     }
-    
+
     let pendingToClaimable = 0;
+    let tfryPendingToClaimable = 0;
     let hasUpdates = false;
-    
+
     // Update statuses in daily_rewards array for rewards older than 30 days
     deviceReward.daily_rewards.forEach(reward => {
       if (reward.status === 'pending' && reward.created_at <= thirtyDaysAgo) {
         reward.status = 'claimable';
         pendingToClaimable += reward.amount;
+        // Track tFry amounts separately
+        if (isTfryAsset(reward.asset_id)) {
+          tfryPendingToClaimable += reward.amount;
+        }
         hasUpdates = true;
         DEBUG && console.log(`Updating reward #${reward.reward_number} from pending to claimable for ${device.miner_key}`);
       }
     });
-    
+
     if (hasUpdates) {
-      // Update the totals to reflect status changes
-      deviceReward.total_pending -= pendingToClaimable;
-      deviceReward.total_claimable += pendingToClaimable;
+      // Update the totals to reflect status changes (non-tFry amounts)
+      const otherAmount = Math.round((pendingToClaimable - tfryPendingToClaimable) * 100) / 100;
+      if (otherAmount !== 0) {
+        deviceReward.total_pending -= otherAmount;
+        deviceReward.total_claimable += otherAmount;
+      }
+      // Update tFry-specific totals
+      if (tfryPendingToClaimable !== 0) {
+        deviceReward.tfry_pending = (deviceReward.tfry_pending || 0) - tfryPendingToClaimable;
+        deviceReward.tfry_claimable = (deviceReward.tfry_claimable || 0) + tfryPendingToClaimable;
+        // Also update general totals for tFry
+        deviceReward.total_pending -= tfryPendingToClaimable;
+        deviceReward.total_claimable += tfryPendingToClaimable;
+      }
       deviceReward.last_updated = currentDate;
       (deviceReward as any).markModified?.('daily_rewards');
       // Save the updated document
@@ -498,9 +514,9 @@ const pendingManage = async (
     } else {
       DEBUG && console.log(`No pending rewards older than 30 days found for ${device.miner_key}`);
     }
-    
+
     return true;
-    
+
   } catch (error) {
     DEBUG && console.error(`Device status update failed for ${device.miner_key}:`, error);
     return false;

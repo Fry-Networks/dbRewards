@@ -28,7 +28,8 @@ async function startWeeklyWorker(): Promise<void> {
   let maturationInFlight = false;
 
   const runRollupIfNeeded = async (now: Date): Promise<void> => {
-    if (now.getUTCDay() !== 5 || now.getUTCHours() !== 0 || now.getUTCMinutes() !== 0) {
+    // Use a 5-minute window (00:00-00:05) to avoid missing the trigger due to interval timing
+    if (now.getUTCDay() !== 5 || now.getUTCHours() !== 0 || now.getUTCMinutes() >= 5) {
       return;
     }
     const key = `rollup-${formatUtcDate(now)}`;
@@ -48,7 +49,8 @@ async function startWeeklyWorker(): Promise<void> {
   };
 
   const runMaturationIfNeeded = async (now: Date): Promise<void> => {
-    if (now.getUTCHours() !== 3 || now.getUTCMinutes() !== 0) {
+    // Use a 5-minute window (03:00-03:05) to avoid missing the trigger due to interval timing
+    if (now.getUTCHours() !== 3 || now.getUTCMinutes() >= 5) {
       return;
     }
     const key = `maturation-${formatUtcDate(now)}`;

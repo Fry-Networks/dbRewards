@@ -294,7 +294,7 @@ export async function runPeriodicHealthCheck(): Promise<void> {
 // Schedule periodic health checks (every 10 minutes)
 export function startPeriodicHealthChecks(): void {
   if (process.env.ALERTS_ENABLED === 'true') {
-    console.log('� Starting periodic health checks with alerting');
+    console.log('🔔 Starting periodic health checks with alerting');
     
     // Run immediately
     runPeriodicHealthCheck();

@@ -7,10 +7,11 @@ import { ProductModel } from "../db/products-schema";
 import { DeviceRewardModel, TestDeviceRewardModel, DeviceReward } from "../db/device-rewards-schema";
 import "dotenv/config";
 
-import { 
-  isRegistrationStaked, 
-  isNodeStaked 
+import {
+  isRegistrationStaked,
+  isNodeStaked
 } from "../reward";
+import { isTfryAsset, applyTfryDelta, TFRY_ASSET_ID } from "../reward-totals";
 
 // PHASE 1: Historical Eligibility Validation Functions
 
@@ -864,16 +865,27 @@ async function generateMissingRewards(config: BackpayConfig): Promise<void> {
               try {
                 let totalPendingIncrease = 0;
                 let totalClaimableIncrease = 0;
+                let tfryPendingIncrease = 0;
+                let tfryClaimableIncrease = 0;
                 const dailyRewardsToAdd: any[] = [];
-                
+
                 // Prepare all rewards for this device
                 for (const reward of deviceRewards) {
+                  const isTfry = isTfryAsset(reward.asset_id);
                   if (reward.status === 'pending') {
-                    totalPendingIncrease += reward.amount;
+                    if (isTfry) {
+                      tfryPendingIncrease += reward.amount;
+                    } else {
+                      totalPendingIncrease += reward.amount;
+                    }
                   } else {
-                    totalClaimableIncrease += reward.amount;
+                    if (isTfry) {
+                      tfryClaimableIncrease += reward.amount;
+                    } else {
+                      totalClaimableIncrease += reward.amount;
+                    }
                   }
-                  
+
                   dailyRewardsToAdd.push({
                     date: reward.dateString,
                     amount: reward.amount,
@@ -883,13 +895,20 @@ async function generateMissingRewards(config: BackpayConfig): Promise<void> {
                     reward_number: reward.reward_number
                   });
                 }
-                
+
                 // Update device reward document with all rewards at once
-                const incFields: any = { 
+                const incFields: any = {
                   reward_count: deviceRewards.length,
                   total_pending: totalPendingIncrease,
                   total_claimable: totalClaimableIncrease
                 };
+                // Apply tFry-specific increments
+                if (tfryPendingIncrease !== 0 || tfryClaimableIncrease !== 0) {
+                  applyTfryDelta(incFields, {
+                    pending: tfryPendingIncrease,
+                    claimable: tfryClaimableIncrease
+                  });
+                }
 
                 await (testMode ? TestDeviceRewardModel : DeviceRewardModel)
                   .findOneAndUpdate(
@@ -948,14 +967,23 @@ async function generateMissingRewards(config: BackpayConfig): Promise<void> {
             // Fall back to individual device processing
             for (const reward of rewardsToCreate) {
               try {
-                const incFields: any = { 
+                const incFields: any = {
                   reward_count: 1
                 };
-                
+
+                const isTfry = isTfryAsset(reward.asset_id);
                 if (reward.status === 'pending') {
-                  incFields.total_pending = reward.amount;
+                  if (isTfry) {
+                    applyTfryDelta(incFields, { pending: reward.amount });
+                  } else {
+                    incFields.total_pending = reward.amount;
+                  }
                 } else {
-                  incFields.total_claimable = reward.amount;
+                  if (isTfry) {
+                    applyTfryDelta(incFields, { claimable: reward.amount });
+                  } else {
+                    incFields.total_claimable = reward.amount;
+                  }
                 }
 
                 await (testMode ? TestDeviceRewardModel : DeviceRewardModel)
@@ -984,7 +1012,7 @@ async function generateMissingRewards(config: BackpayConfig): Promise<void> {
                     },
                     { upsert: true, new: true }
                   );
-                  
+
                 progress.successCount++;
               } catch (individualError) {
                 const individualErrorId = errorTracker.trackError(individualError, 'backpay', 'individual_device_insert', reward.miner_key);

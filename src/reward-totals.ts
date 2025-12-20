@@ -1,6 +1,7 @@
 export const TFRY_ASSET_ID = '2681521901';
 export const FNODE_ASSET_ID = '2485202024';
 export const FRY20_ASSET_ID = '2485314946';
+export const LEGACY_FRY_ASSET_ID = FRY20_ASSET_ID; // Alias for backwards compatibility
 
 export type TfryDelta = {
   pending?: number;

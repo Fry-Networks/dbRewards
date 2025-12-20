@@ -10,6 +10,14 @@ import { auditLogger } from '../security/audit-logger';
 import { rateLimiter, createRateLimitMiddleware } from '../security/rate-limiter';
 import { backupManager } from '../security/backup-manager';
 import { dataValidator } from '../security/data-validator';
+// PoC (Proof of Connectivity) imports
+import {
+  recordMinerActivity,
+  recordMinerActivityBulk,
+  getConnectivityReport,
+  getDailyPocSummary,
+  isPocEnabled,
+} from '../poc/poc-service';
 import "dotenv/config";
 
 const app = express();
@@ -357,6 +365,208 @@ app.post('/api/admin/weekly/force-claim', createRateLimitMiddleware('admin'), ad
   } catch (err) {
     console.error('admin/weekly/force-claim error', err);
     res.status(500).json({ success: false, message: String(err) });
+  }
+});
+
+// ---------- PoC (Proof of Connectivity) API Endpoints ----------
+
+/**
+ * POST /api/poc/activity - Record miner activity (data received)
+ * Called by miners/gateways when data is sent/received.
+ *
+ * Body: { miner_key: string, timestamp?: string (ISO) }
+ * OR for bulk: { activities: Array<{ miner_key: string, timestamp?: string }> }
+ */
+app.post('/api/poc/activity', createRateLimitMiddleware('api'), async (req, res) => {
+  try {
+    if (!isPocEnabled()) {
+      return res.status(503).json({
+        success: false,
+        message: 'Proof of Connectivity is disabled',
+      });
+    }
+
+    await connect();
+
+    const { miner_key, timestamp, activities } = req.body || {};
+
+    // Handle bulk activity recording
+    if (activities && Array.isArray(activities)) {
+      const parsed = activities.map((a: { miner_key: string; timestamp?: string }) => ({
+        minerKey: a.miner_key,
+        timestamp: a.timestamp ? new Date(a.timestamp) : undefined,
+      }));
+
+      const count = await recordMinerActivityBulk(parsed);
+      return res.json({
+        success: true,
+        recorded: count,
+        message: `Recorded ${count} activity events`,
+      });
+    }
+
+    // Handle single activity recording
+    if (!miner_key) {
+      return res.status(400).json({
+        success: false,
+        message: 'miner_key is required',
+      });
+    }
+
+    const ts = timestamp ? new Date(timestamp) : undefined;
+    const result = await recordMinerActivity(miner_key, ts);
+
+    if (!result) {
+      return res.status(500).json({
+        success: false,
+        message: 'Failed to record activity',
+      });
+    }
+
+    return res.json({
+      success: true,
+      message: 'Activity recorded',
+      connectivity: {
+        date: result.date,
+        hoursWithData: result.hours_with_data,
+        connectivityPercentage: result.connectivity_percentage,
+      },
+    });
+  } catch (error) {
+    console.error('PoC activity recording error:', error);
+    res.status(500).json({
+      success: false,
+      message: String(error),
+    });
+  }
+});
+
+/**
+ * GET /api/poc/report/:minerKey/:date - Get connectivity report for a miner on a date
+ * Date format: YYYY-MM-DD
+ */
+app.get('/api/poc/report/:minerKey/:date', async (req, res) => {
+  try {
+    if (!isPocEnabled()) {
+      return res.status(503).json({
+        success: false,
+        message: 'Proof of Connectivity is disabled',
+      });
+    }
+
+    await connect();
+
+    const { minerKey, date } = req.params;
+
+    if (!minerKey || !date) {
+      return res.status(400).json({
+        success: false,
+        message: 'minerKey and date are required',
+      });
+    }
+
+    // Validate date format
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid date format. Use YYYY-MM-DD',
+      });
+    }
+
+    const report = await getConnectivityReport(minerKey, date);
+
+    if (!report) {
+      return res.status(404).json({
+        success: false,
+        message: 'No connectivity data found for this miner and date',
+      });
+    }
+
+    return res.json({
+      success: true,
+      report,
+    });
+  } catch (error) {
+    console.error('PoC report error:', error);
+    res.status(500).json({
+      success: false,
+      message: String(error),
+    });
+  }
+});
+
+/**
+ * GET /api/poc/summary/:date - Get daily PoC summary across all miners
+ * Date format: YYYY-MM-DD
+ */
+app.get('/api/poc/summary/:date', async (req, res) => {
+  try {
+    if (!isPocEnabled()) {
+      return res.status(503).json({
+        success: false,
+        message: 'Proof of Connectivity is disabled',
+      });
+    }
+
+    await connect();
+
+    const { date } = req.params;
+
+    if (!date) {
+      return res.status(400).json({
+        success: false,
+        message: 'date is required',
+      });
+    }
+
+    // Validate date format
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid date format. Use YYYY-MM-DD',
+      });
+    }
+
+    const summary = await getDailyPocSummary(date);
+
+    return res.json({
+      success: true,
+      summary,
+    });
+  } catch (error) {
+    console.error('PoC summary error:', error);
+    res.status(500).json({
+      success: false,
+      message: String(error),
+    });
+  }
+});
+
+/**
+ * GET /api/poc/status - Get PoC system status
+ */
+app.get('/api/poc/status', async (req, res) => {
+  try {
+    const enabled = isPocEnabled();
+    const today = new Date().toISOString().split('T')[0];
+
+    let todaySummary = null;
+    if (enabled) {
+      await connect();
+      todaySummary = await getDailyPocSummary(today);
+    }
+
+    return res.json({
+      success: true,
+      enabled,
+      today: todaySummary,
+    });
+  } catch (error) {
+    console.error('PoC status error:', error);
+    res.status(500).json({
+      success: false,
+      message: String(error),
+    });
   }
 });
 

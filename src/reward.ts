@@ -64,6 +64,8 @@ import { getSimNow } from "./time-control";
 import { validateMacAddress } from "./security/mac-validator";
 import { type RewardReport, type RewardReportEntry } from "./reporting/reward-report";
 import { applyTfryDelta, isTfryAsset } from "./reward-totals";
+// NEW: Import PoC (Proof of Connectivity) service for hourly connectivity validation
+import { calculatePocMultiplier, isPocEnabled, markDayVerified } from "./poc/poc-service";
 
 const minerType = {
   weather: [ "HWM", "LWM" ],
@@ -1134,6 +1136,7 @@ export type AccrualSummary = {
   skippedDuplicates: number;
   notEligible: number;
   noWallet: number;
+  noPocConnectivity: number;  // NEW: Devices with no PoC connectivity
   otherValidation: number;
   dbErrors: number;
 };
@@ -1155,6 +1158,7 @@ export const doRewards = async (
   let skippedDuplicates = 0;
   let notEligible = 0;
   let noWallet = 0;
+  let noPocConnectivity = 0;
   let otherValidation = 0;
   let dbErrors = 0;
 
@@ -1300,21 +1304,54 @@ export const doRewards = async (
         }
 
         // CONSISTENCY FIX: Use new reward calculation - SAME AS BACKPAY
-        const rewardAmount = calculateCurrentRewardAmount(device, product, eligibilityResult);
-        
+        let rewardAmount = calculateCurrentRewardAmount(device, product, eligibilityResult);
+
         if (rewardAmount <= 0) {
           DEBUG && console.log(`Invalid reward amount for device ${device.miner_key}`);
           return { device, err: "Invalid reward amount" };
         }
-        
+
+        // PROOF OF CONNECTIVITY (PoC): Apply connectivity multiplier
+        // We check YESTERDAY's connectivity since it's a complete 24-hour window.
+        // If a miner had data for 18/24 hours yesterday, they get 75% of today's reward.
+        let pocMultiplier = 1.0;
+        if (isPocEnabled()) {
+          const yesterday = new Date(currentDate);
+          yesterday.setDate(yesterday.getDate() - 1);
+          const yesterdayDateString = yesterday.toISOString().split('T')[0];
+
+          try {
+            pocMultiplier = await calculatePocMultiplier(device.miner_key, yesterdayDateString);
+
+            // Apply the PoC multiplier to the reward amount
+            if (pocMultiplier < 1.0) {
+              const originalAmount = rewardAmount;
+              rewardAmount = Math.round(rewardAmount * pocMultiplier * 100) / 100;
+              DEBUG && console.log(
+                `PoC adjustment for ${device.miner_key}: ${originalAmount} * ${pocMultiplier.toFixed(4)} = ${rewardAmount}`
+              );
+            }
+
+            // If PoC multiplier is 0, skip this device (no connectivity at all yesterday)
+            if (pocMultiplier === 0 && rewardAmount === 0) {
+              return { device, err: "No PoC connectivity" };
+            }
+          } catch (pocError) {
+            // On PoC error, continue with full reward to avoid penalizing miners
+            DEBUG && console.log(`PoC check failed for ${device.miner_key}, using full reward: ${pocError}`);
+          }
+        }
+
         // Log device type and eligibility for debugging (first batch only)
         if (i === 0 && batch.indexOf(device) < 10) {
           const deviceType = getDeviceType(device.miner_key);
-          DEBUG && console.log(`Daily: Device ${device.miner_key} (${deviceType}): ${eligibilityResult.reason} -> ${rewardAmount} reward`);
+          DEBUG && console.log(
+            `Daily: Device ${device.miner_key} (${deviceType}): ${eligibilityResult.reason} -> ${rewardAmount} reward (PoC: ${(pocMultiplier * 100).toFixed(1)}%)`
+          );
         }
 
         // Return valid reward data for bulk processing
-        return { device, product, amount: rewardAmount, valid: true };
+        return { device, product, amount: rewardAmount, pocMultiplier, valid: true };
         
       } catch (error) {
         console.error(`Error validating device ${device.miner_key}: ${error}`);
@@ -1351,6 +1388,7 @@ export const doRewards = async (
     for (const e of invalidDevices) {
       if (e.err === 'Device not eligible') notEligible++;
       else if (e.err === 'No reward wallet') noWallet++;
+      else if (e.err === 'No PoC connectivity') noPocConnectivity++;
       else otherValidation++;
     }
     
@@ -1458,10 +1496,11 @@ export const doRewards = async (
     `Skipped (duplicate guard): ${skippedDuplicates}`,
     `Devices not eligible: ${notEligible}`,
     `No reward wallet: ${noWallet}`,
+    `No PoC connectivity: ${noPocConnectivity}`,
     `Other validation errors: ${otherValidation}`,
     `DB/errors during bulk: ${dbErrors}`,
     `Success rate (inserted / eligible): ${successRate}%`,
-    '-----------------------------------'    
+    '-----------------------------------'
   );
 
   const summary: AccrualSummary = {
@@ -1471,6 +1510,7 @@ export const doRewards = async (
     skippedDuplicates,
     notEligible,
     noWallet,
+    noPocConnectivity,
     otherValidation,
     dbErrors
   };

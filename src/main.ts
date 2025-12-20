@@ -24,6 +24,7 @@ import { dataValidator } from "./security/data-validator";
 import { logSection } from "./logger";
 import { withJobLock } from "./scheduler/job-lock";
 import { applyTfryDelta, getRewardAssetLabel, isTfryAsset, TFRY_ASSET_ID } from "./reward-totals";
+import { isPocEnabled } from "./poc/poc-service";
 
 const testMode = process.env.TEST_MODE
   ? process.env.TEST_MODE === "true"
@@ -192,6 +193,7 @@ type HourlySummary = {
   skippedDuplicates: number;
   notEligible: number;
   noWallet: number;
+  noPocConnectivity: number;
   otherValidation: number;
   dbErrors: number;
 };
@@ -382,10 +384,11 @@ const main = async (devicesToProcess?: Device[]): Promise<HourlyRunResult> => {
 
   // OLD_LOGIC_BACKUP: Only ensured old reward collections
   // await ensureCollectionsExist(db, ["rewards", "test-rewards"]);
-  
+
   // Ensure aggregated collection exists
   await ensureCollectionsExist(db, [
-    "device-rewards"
+    "device-rewards",
+    "miner-activity"  // PoC (Proof of Connectivity) tracking
   ]);
 
   const rewardsConfig = await connection.connection
@@ -394,7 +397,7 @@ const main = async (devicesToProcess?: Device[]): Promise<HourlyRunResult> => {
   if (!testMode && !rewardsConfig?.enabled) {
     logSection("Rewards are disabled");
     return {
-      summary: { eligibleDevices: 0, insertedDevices: 0, insertedRows: 0, skippedDuplicates: 0, notEligible: 0, noWallet: 0, otherValidation: 0, dbErrors: 0 },
+      summary: { eligibleDevices: 0, insertedDevices: 0, insertedRows: 0, skippedDuplicates: 0, notEligible: 0, noWallet: 0, noPocConnectivity: 0, otherValidation: 0, dbErrors: 0 },
       report: { successes: [], failures: [] }
     };
   }
@@ -427,7 +430,7 @@ const main = async (devicesToProcess?: Device[]): Promise<HourlyRunResult> => {
 
   let retryCount = 0;
   // aggregate across retries
-  let summaryAgg: HourlySummary = { eligibleDevices: 0, insertedDevices: 0, insertedRows: 0, skippedDuplicates: 0, notEligible: 0, noWallet: 0, otherValidation: 0, dbErrors: 0 };
+  let summaryAgg: HourlySummary = { eligibleDevices: 0, insertedDevices: 0, insertedRows: 0, skippedDuplicates: 0, notEligible: 0, noWallet: 0, noPocConnectivity: 0, otherValidation: 0, dbErrors: 0 };
   const reportAggregator = new RewardReportAggregator();
 
   while (retryCount < 5) {
@@ -439,6 +442,7 @@ const main = async (devicesToProcess?: Device[]): Promise<HourlyRunResult> => {
     summaryAgg.skippedDuplicates += summary.skippedDuplicates;
     summaryAgg.notEligible += summary.notEligible;
     summaryAgg.noWallet += summary.noWallet;
+    summaryAgg.noPocConnectivity += summary.noPocConnectivity;
     summaryAgg.otherValidation += summary.otherValidation;
     summaryAgg.dbErrors += summary.dbErrors;
 
@@ -500,6 +504,7 @@ interface ProcessingMetrics {
   skippedDuplicates?: number;
   notEligible?: number;
   noWallet?: number;
+  noPocConnectivity?: number;
   otherValidation?: number;
   dbErrors?: number;
 }
@@ -522,6 +527,7 @@ async function logProcessingMetrics(metrics: ProcessingMetrics): Promise<void> {
   const skippedDuplicates = metrics.skippedDuplicates ?? 0;
   const notEligible = metrics.notEligible ?? 0;
   const noWallet = metrics.noWallet ?? 0;
+  const noPocConnectivity = metrics.noPocConnectivity ?? 0;
   const otherValidation = metrics.otherValidation ?? 0;
   const dbErrors = metrics.dbErrors ?? 0;
 
@@ -533,7 +539,7 @@ async function logProcessingMetrics(metrics: ProcessingMetrics): Promise<void> {
     `  Rewards generated: ${metrics.rewardsGenerated} | Success rate: ${successRate}`,
     `  Eligible: ${eligibleDevices} | Inserted devices: ${insertedDevices} | Inserted rows: ${insertedRows}`,
     `  Skipped duplicates: ${skippedDuplicates} | Not eligible: ${notEligible} | No wallet: ${noWallet}`,
-    `  Other validation errors: ${otherValidation} | DB errors: ${dbErrors}`
+    `  No PoC connectivity: ${noPocConnectivity} | Other validation errors: ${otherValidation} | DB errors: ${dbErrors}`
   );
 
   // Log performance warnings
@@ -649,6 +655,7 @@ async function rewardSystem() {
               skippedDuplicates: hourlySummary.skippedDuplicates,
               notEligible: hourlySummary.notEligible,
               noWallet: hourlySummary.noWallet,
+              noPocConnectivity: hourlySummary.noPocConnectivity,
               otherValidation: hourlySummary.otherValidation,
               dbErrors: hourlySummary.dbErrors
             };
@@ -742,6 +749,7 @@ async function runHourBatch(hour: number, preloadedDevices?: Device[]): Promise<
         skippedDuplicates: hourlySummary.skippedDuplicates,
         notEligible: hourlySummary.notEligible,
         noWallet: hourlySummary.noWallet,
+        noPocConnectivity: hourlySummary.noPocConnectivity,
         otherValidation: hourlySummary.otherValidation,
         dbErrors: hourlySummary.dbErrors
       };
@@ -1872,6 +1880,7 @@ export async function startRewardSystem(): Promise<void> {
     `Each device assigned to specific hour based on device ID hash`,
     `Global status updates will run daily at 2:50 AM`,
     `Weekly roll-up ${WEEKLY_REWARDS_ENABLED ? 'ENABLED' : 'DISABLED'} (Friday 00:05 UTC)`,
+    `Proof of Connectivity (PoC) ${isPocEnabled() ? 'ENABLED' : 'DISABLED'} - rewards adjusted by hourly connectivity`,
     getTimeConfigSummary()
   );
 

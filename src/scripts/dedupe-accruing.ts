@@ -1,7 +1,6 @@
 import 'dotenv/config';
 import { connect } from '../db/connect';
 import { DeviceRewardModel, TestDeviceRewardModel } from '../db/device-rewards-schema';
-import { isTfryAsset, TFRY_ASSET_ID } from '../reward-totals';
 
 const testMode = process.env.TEST_MODE === 'true';
 const DRY = process.argv.includes('--dry-run');
@@ -70,36 +69,15 @@ export async function dedupeAccruing(): Promise<void> {
       let totalPending = 0;
       let totalClaimable = 0;
       let totalClaimed = 0;
-      let tfryPending = 0;
-      let tfryClaimable = 0;
-      let tfryClaimed = 0;
 
       for (const reward of doc.daily_rewards || []) {
         const hasId = reward?._id !== undefined && reward?._id !== null;
         const keep = hasId ? keepIds.has(String(reward._id)) : true;
         if (keep) {
           newDaily.push(reward);
-          const amount = Number(reward.amount || 0);
-          const isTfry = isTfryAsset(reward.asset_id);
-          if (reward.status === 'pending') {
-            if (isTfry) {
-              tfryPending += amount;
-            } else {
-              totalPending += amount;
-            }
-          } else if (reward.status === 'claimable') {
-            if (isTfry) {
-              tfryClaimable += amount;
-            } else {
-              totalClaimable += amount;
-            }
-          } else if (reward.status === 'claimed') {
-            if (isTfry) {
-              tfryClaimed += amount;
-            } else {
-              totalClaimed += amount;
-            }
-          }
+          if (reward.status === 'pending') totalPending += Number(reward.amount || 0);
+          else if (reward.status === 'claimable') totalClaimable += Number(reward.amount || 0);
+          else if (reward.status === 'claimed') totalClaimed += Number(reward.amount || 0);
         }
       }
 
@@ -111,11 +89,7 @@ export async function dedupeAccruing(): Promise<void> {
             reward_count: newDaily.length,
             total_pending: totalPending,
             total_claimable: totalClaimable,
-            total_claimed: totalClaimed,
-            tfry_pending: tfryPending,
-            tfry_claimable: tfryClaimable,
-            tfry_claimed: tfryClaimed,
-            tfry_total: tfryPending + tfryClaimable + tfryClaimed
+            total_claimed: totalClaimed
           }
         }
       );

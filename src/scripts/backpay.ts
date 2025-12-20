@@ -11,7 +11,6 @@ import {
   isRegistrationStaked,
   isNodeStaked
 } from "../reward";
-import { isTfryAsset, applyTfryDelta, TFRY_ASSET_ID } from "../reward-totals";
 
 // PHASE 1: Historical Eligibility Validation Functions
 
@@ -865,25 +864,14 @@ async function generateMissingRewards(config: BackpayConfig): Promise<void> {
               try {
                 let totalPendingIncrease = 0;
                 let totalClaimableIncrease = 0;
-                let tfryPendingIncrease = 0;
-                let tfryClaimableIncrease = 0;
                 const dailyRewardsToAdd: any[] = [];
 
                 // Prepare all rewards for this device
                 for (const reward of deviceRewards) {
-                  const isTfry = isTfryAsset(reward.asset_id);
                   if (reward.status === 'pending') {
-                    if (isTfry) {
-                      tfryPendingIncrease += reward.amount;
-                    } else {
-                      totalPendingIncrease += reward.amount;
-                    }
+                    totalPendingIncrease += reward.amount;
                   } else {
-                    if (isTfry) {
-                      tfryClaimableIncrease += reward.amount;
-                    } else {
-                      totalClaimableIncrease += reward.amount;
-                    }
+                    totalClaimableIncrease += reward.amount;
                   }
 
                   dailyRewardsToAdd.push({
@@ -902,13 +890,6 @@ async function generateMissingRewards(config: BackpayConfig): Promise<void> {
                   total_pending: totalPendingIncrease,
                   total_claimable: totalClaimableIncrease
                 };
-                // Apply tFry-specific increments
-                if (tfryPendingIncrease !== 0 || tfryClaimableIncrease !== 0) {
-                  applyTfryDelta(incFields, {
-                    pending: tfryPendingIncrease,
-                    claimable: tfryClaimableIncrease
-                  });
-                }
 
                 await (testMode ? TestDeviceRewardModel : DeviceRewardModel)
                   .findOneAndUpdate(
@@ -971,19 +952,10 @@ async function generateMissingRewards(config: BackpayConfig): Promise<void> {
                   reward_count: 1
                 };
 
-                const isTfry = isTfryAsset(reward.asset_id);
                 if (reward.status === 'pending') {
-                  if (isTfry) {
-                    applyTfryDelta(incFields, { pending: reward.amount });
-                  } else {
-                    incFields.total_pending = reward.amount;
-                  }
+                  incFields.total_pending = reward.amount;
                 } else {
-                  if (isTfry) {
-                    applyTfryDelta(incFields, { claimable: reward.amount });
-                  } else {
-                    incFields.total_claimable = reward.amount;
-                  }
+                  incFields.total_claimable = reward.amount;
                 }
 
                 await (testMode ? TestDeviceRewardModel : DeviceRewardModel)

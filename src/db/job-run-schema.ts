@@ -69,4 +69,8 @@ export interface JobRun extends mongoose.Document {
 }
 
 export const JobRunModel = mongoose.model<JobRun>('rewards_job_run', jobRunSchema);
-export const TestJobRunModel = mongoose.model<JobRun>('test_rewards_job_run', jobRunSchema);
+export const TestJobRunModel = mongoose.model<JobRun>(
+  'test_rewards_job_run',
+  jobRunSchema,
+  'test-rewards-job-runs',
+);

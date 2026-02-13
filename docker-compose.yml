@@ -3,11 +3,11 @@ services:
     build: .
     container_name: dbrewards-prod
     restart: unless-stopped
+    network_mode: "host" # Use host network so tailnet access comes from the host (no sidecar needed).
     environment:
       # 1Password secrets injection
-      OP_SERVICE_ACCOUNT_TOKEN: ${OP_SERVICE_ACCOUNT_TOKEN?missing_OP_SERVICE_ACCOUNT_TOKEN}
-      MONGO_URI: op://dbRewards/MONGO_URI/password
-      CREDS_MONGO_URI: op://dbRewards/CREDS_MONGO_URI/password
+      MONGO_URI: op://dbRewards/MONGO_SELF_URI/mongo_uri
+      CREDS_MONGO_URI: op://dbRewards/CREDS_SELF_MONGO_URI/password
       DISCORD_WEBHOOK_URL: op://dbRewards/DISCORD_WEBHOOK_URL/password
       # Static configuration
       CREDS_HARDWARE_COLLECTION: "hardware"
@@ -24,6 +24,8 @@ services:
       NODE_OPTIONS: "--max-old-space-size=8192"
       WEEKLY_REWARDS_ENABLED: "true"
       INLINE_WEEKLY_JOBS: "false"
+      POC_REWARD_BM: "true" # Enable PoC slot-based rewards for BM devices.
+      POC_REWARD_AEM: "true" # Enable PoC slot-based rewards for AEM devices.
       NEXT_PUBLIC_WEEKLY_REWARDS_ENABLED: "true"
       WEEKLY_CUTOFF_UTC: "2025-09-12T00:00:00.00Z"
       SIMULATION_ENABLED: "false"
@@ -41,16 +43,17 @@ services:
       DAILY_MATURATION_ONCE_TIMEBASE: "real"
       ADMIN_ALLOWED_IPS:
       ADMIN_ENDPOINTS_ENABLED: "false"
-      REWARD_REPORT_DIR: /home/debfrynetadm/projects/dbRewards/reward-reports
+      REWARD_REPORT_DIR: /home/fryadmin/projects/dbRewards/reward-reports
     volumes:
       - ./logs:/app/logs
       - ./backups:/app/backups
-      - /var/run/docker.sock:/var/run/docker.sock:ro
-      - /home/debfrynetadm/projects/dbRewards/reward-reports:/home/debfrynetadm/projects/dbRewards/reward-reports
-    ports:
-      - "30033:30033"  # Web dashboard
-    networks:
-      - dbrewards-network
+      - /etc/ssl/mongo/ca/certs/mongo-ca.crt:/etc/ssl/mongo/mongo-ca.crt:ro # Mount MongoDB CA cert for TLS validation.
+      - /home/fryadmin/projects/dbRewards/reward-reports:/home/fryadmin/projects/dbRewards/reward-reports
+    secrets:
+      - op_service_account_token
+    # ports omitted because host networking publishes container ports directly on the host.
+    #networks:
+    #  - dbrewards-network
     healthcheck:
       test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:30033/health"]
       interval: 30s
@@ -70,12 +73,12 @@ services:
     restart: "no"
     profiles:
       - simulation
+    network_mode: "host" # Use host network so tailnet access comes from the host (no sidecar needed).
     environment:
       # 1Password secrets injection
-      OP_SERVICE_ACCOUNT_TOKEN: ${OP_SERVICE_ACCOUNT_TOKEN?missing_OP_SERVICE_ACCOUNT_TOKEN}
-      MONGO_URI: op://dbRewards/MONGO_URI/password
+      MONGO_URI: op://dbRewards/MONGO_SELF_URI/mongo_uri
       #use /dbRewards/VER_MONGO_URI/password for testing DB Project
-      CREDS_MONGO_URI: op://dbRewards/CREDS_MONGO_URI/password
+      CREDS_MONGO_URI: op://dbRewards/CREDS_SELF_MONGO_URI/password
       DISCORD_WEBHOOK_URL: op://dbRewards/DISCORD_WEBHOOK_URL/password
       # Simulation mode configuration
       CREDS_HARDWARE_COLLECTION: "hardware"
@@ -93,11 +96,13 @@ services:
       WEEKLY_REWARDS_ENABLED: "true"
       INLINE_WEEKLY_JOBS: "false"
       NEXT_PUBLIC_WEEKLY_REWARDS_ENABLED: "true"
+      POC_REWARD_BM: "true" # Enable PoC slot-based rewards for BM devices.
+      POC_REWARD_AEM: "true" # Enable PoC slot-based rewards for AEM devices.
       SIMULATION_ENABLED: "true"
       TEST_MODE: "false"
       DEBUG: "false"
-      TIME_ACCEL: 32
-      SIM_START_AT: "2025-11-11T00:00:00Z"
+      TIME_ACCEL: 24
+      SIM_START_AT: "2026-01-28T19:05:00Z"
       ALERTS_ENABLED: "false"
       DASHBOARD_PORT: 30032
       MATURATION_ENABLED: "true"
@@ -105,14 +110,16 @@ services:
       DAILY_MATURATION_ONCE_TIMEBASE: "real"
       DAILY_MATURATION_ENABLED: "false"
       WEEKLY_MATURATION_ENABLED: "false"
-      REWARD_REPORT_DIR: /home/debfrynetadm/projects/dbRewards/reward-reports
+      REWARD_REPORT_DIR: /home/fryadmin/projects/dbRewards/reward-reports
     volumes:
-      - /home/debfrynetadm/projects/dbRewards/logs:/app/logs
-      - /home/debfrynetadm/projects/dbRewards/reward-reports:/home/debfrynetadm/projects/dbRewards/reward-reports
-    ports:
-      - "30032:30032"  # Web dashboard for simulation
-    networks:
-      - dbrewards-network
+      - /home/fryadmin/projects/dbRewards/logs:/app/logs
+      - /etc/ssl/mongo/ca/certs/mongo-ca.crt:/etc/ssl/mongo/mongo-ca.crt:ro # Mount MongoDB CA cert for TLS validation.
+      - /home/fryadmin/projects/dbRewards/reward-reports:/home/fryadmin/projects/dbRewards/reward-reports
+    secrets:
+      - op_service_account_token
+    # ports omitted because host networking publishes container ports directly on the host.
+#    networks:
+#      - dbrewards-network
     logging:
       driver: "json-file"
       options:
@@ -123,13 +130,13 @@ services:
     build: .
     container_name: dbrewards-weekly
     restart: "no"
-    command: ["dumb-init", "op", "run", "--", "node", "dist/scripts/run-weekly-jobs.js"]
-    profiles:
-      - simulation
+    network_mode: "host" # Use host network so tailnet access comes from the host (no sidecar needed).
+    command: ["node", "dist/scripts/run-weekly-jobs.js"]
+    #profiles:
+     # - simulation
     environment:
-      OP_SERVICE_ACCOUNT_TOKEN: ${OP_SERVICE_ACCOUNT_TOKEN?missing_OP_SERVICE_ACCOUNT_TOKEN}
-      MONGO_URI: op://dbRewards/MONGO_URI/password
-      CREDS_MONGO_URI: op://dbRewards/CREDS_MONGO_URI/password
+      MONGO_URI: op://dbRewards/MONGO_SELF_URI/mongo_uri
+      CREDS_MONGO_URI: op://dbRewards/CREDS_SELF_MONGO_URI/password
       DISCORD_WEBHOOK_URL: op://dbRewards/DISCORD_WEBHOOK_URL/password
       CREDS_HARDWARE_COLLECTION: "hardware"
       CREDS_DB_NAME: "creds"
@@ -145,9 +152,11 @@ services:
       NODE_OPTIONS: "--max-old-space-size=4096"
       WEEKLY_REWARDS_ENABLED: "true"
       NEXT_PUBLIC_WEEKLY_REWARDS_ENABLED: "true"
-      SIMULATION_ENABLED: "false"
-      TIME_ACCEL: 4
-      SIM_START_AT: "2025-11-09T04:00:00Z"
+      POC_REWARD_BM: "true" # Enable PoC slot-based rewards for BM devices.
+      POC_REWARD_AEM: "true" # Enable PoC slot-based rewards for AEM devices.
+      SIMULATION_ENABLED: "false"      
+      TIME_ACCEL: 1
+      SIM_START_AT: "2026-01-28T19:05:00Z"
       TEST_MODE: "false"
       DEBUG: "false"
       ALERTS_ENABLED: "false"
@@ -156,20 +165,27 @@ services:
       WEEKLY_MATURATION_ENABLED: "true"
       RUN_DAILY_MATURATION_ONCE: "false"
       DAILY_MATURATION_ONCE_TIMEBASE: "real"
-      REWARD_REPORT_DIR: /home/debfrynetadm/projects/dbRewards/reward-reports
+      REWARD_REPORT_DIR: /home/fryadmin/projects/dbRewards/reward-reports
     volumes:
       - ./logs:/app/logs
       - ./backups:/app/backups
-      - /var/run/docker.sock:/var/run/docker.sock:ro
-      - /home/debfrynetadm/projects/dbRewards/reward-reports:/home/debfrynetadm/projects/dbRewards/reward-reports
-    networks:
-      - dbrewards-network
+      - /etc/ssl/mongo/ca/certs/mongo-ca.crt:/etc/ssl/mongo/mongo-ca.crt:ro # Mount MongoDB CA cert for TLS validation.
+      - /home/fryadmin/projects/dbRewards/reward-reports:/home/fryadmin/projects/dbRewards/reward-reports
+    secrets:
+      - op_service_account_token
+    # ports omitted because host networking publishes container ports directly on the host.
+#    networks:
+#      - dbrewards-network
     logging:
       driver: "json-file"
       options:
         max-size: "5m"
         max-file: "2"
+# No custom networks needed; host networking is used for tailnet reachability.
+#networks:
+#  dbrewards-network:
+#    driver: bridge
 
-networks:
-  dbrewards-network:
-    driver: bridge
+secrets:
+  op_service_account_token:
+    file: /etc/opt/dbrewards/op_service_account_token

@@ -95,6 +95,7 @@ export class BackupManager {
     error?: string;
   }> {
     return await withJobLock('daily-backup', ['weekly-rollup', 'hourly-processing'], async () => {
+      await this.ensureBackupDirectory();
       const now = getSimNow();
       const backupFiles: string[] = [];
       
@@ -386,6 +387,7 @@ export class BackupManager {
 
   private async cleanupOldBackups(): Promise<void> {
     try {
+      await this.ensureBackupDirectory();
       const files = await fs.readdir(this.backupDir);
       const cutoffDate = new Date(getSimNow().getTime() - this.retentionDays * 72 * 60 * 60 * 1000);
       

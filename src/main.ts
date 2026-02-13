@@ -1280,6 +1280,31 @@ async function sendWeeklyMaturationReport(
     summary,
   );
   const amountByAsset = withAssetBaseline(summary.amountByAsset);
+  const noMaturation = status === 'completed' && summary.entriesUpdated === 0;
+  if (noMaturation) {
+    const messageLines = [
+      'Weekly maturation completed with no pending rewards to mature.',
+      'Status: online (job ran successfully).',
+    ];
+    if (logPath) {
+      messageLines.push(`Full payload: ${path.relative(process.cwd(), logPath)}`);
+    }
+    const message = toDiscordMessage(
+      messageLines,
+      logPath
+        ? `...truncated; full payload: ${path.relative(process.cwd(), logPath)}`
+        : '...truncated; full payload written to logs.',
+    );
+    await alertingSystem.emit(
+      'INFO',
+      'Weekly maturation completed (no changes)',
+      message,
+      undefined,
+      { force: true },
+    );
+    return;
+  }
+
   const messageLines = [
     `Documents examined: ${summary.documentsExamined}`,
     `Documents updated: ${summary.documentsUpdated}`,

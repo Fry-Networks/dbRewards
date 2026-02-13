@@ -221,7 +221,9 @@ npm run seed         # Seed test data (if configured)
 
 ### Security
 
-- **Environment Variables**: All sensitive data in `.env`
+- **Runtime Secrets**: 1Password Service Account token is read from `/etc/opt/dbrewards/op_service_account_token` via Docker secrets; no secret values live in `docker-compose.yml`
+- **Environment Variables**: `op://` references are used at runtime; do not store secret values in `.env`
+- **Host File Permissions**: `sudo chown root:1001 /etc/opt/dbrewards/op_service_account_token && sudo chmod 0440 /etc/opt/dbrewards/op_service_account_token`
 - **Database Access**: Read-only MCP server for external access
 - **Audit Trails**: All changes logged and tracked
 - **Access Control**: Internal tools only

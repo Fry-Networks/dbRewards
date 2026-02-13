@@ -19,3 +19,11 @@ build.sh
 update-stake-amounts.js
 src/scripts/copy-products.ts
 src/scripts/grant-recent-rewards.ts
+secrets/
+tempminerkeys.txt
+docs/PoC.hardware.sample
+src/scripts/dedupe-daily.ts
+src/scripts/grant-recent-rewards.ts
+src/scripts/remove-weekly-window.ts
+src/scripts/grant-recent-rewards.ts
+src/scripts/verify-conversion.ts

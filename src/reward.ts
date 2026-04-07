@@ -58,6 +58,7 @@ import { Product } from "./db/products-schema";
 // NEW: Import device rewards schema for aggregated reward system
 import { type DeviceReward, DeviceRewardModel, TestDeviceRewardModel } from "./db/device-rewards-schema";
 import { getHardwareCredential, type HardwareCredential } from "./db/hardware-credentials";
+import { shouldValidateLiveness, getPocLiveness } from "./db/poc-liveness";
 import { sleep } from "./main";
 import { logSection } from "./logger";
 import { getSimNow } from "./time-control";
@@ -87,6 +88,20 @@ const minerType = {
 
 type MinerCategory = keyof typeof minerType;
 type MinerType = (typeof minerType)[MinerCategory][number];
+
+// Presale airdrop keys that were generated with CN- prefix but sold as RDN (Compute Node) product.
+// These specific keys must use the RDN product for reward calculation. Does NOT affect other CN- keys.
+const PRESALE_CN_TO_RDN_OVERRIDES = new Set([
+  "CN-CWIP0RDUL3NS11QEYTXJ3Z7VO6CGQY23",
+  "CN-IJN64DMM0V2GT7CBYTG4ODNV6UQ5MW2X",
+  "CN-L9Q5FDW4409L386L6WF9S51VDQ57TH07",
+  "CN-8FDLA1RK8OF56QJPSUS0KF0AETA4V3U4",
+  "CN-8XG0KQMOYS0EN9IV8GHGUBJGN9UKUXFA",
+  "CN-8IPVIXHGWXJ4DDT9AS9Y5L9AOUMKT4G3",
+  "CN-ZPOLFAE24E0VKQ93B9J2KAJHD1WPDJ2Q",
+  "CN-Z8NHBDN99RJKZIJC33581L8J73S439IK",
+  "CN-L8QRUDTLJTZ571SO4H93QBABNFYIMX77",
+]);
 
 // Device type groupings for hardware validation
 const MAC_REQUIRED_PREFIXES = new Set<string>([
@@ -700,7 +715,7 @@ function calculateCurrentRewardAmount(
   let rewardAmount = 0;
 
   // Apply verification multiplier only if staking is currently active
-  if (eligibilityResult.hasVerificationMultiplier && device.verified) {
+  if (eligibilityResult.hasVerificationMultiplier) {
     switch (device.staked?.type) {
       case "one":
         rewardAmount = Math.round(product.reward.verified * 100 * 1.5) / 100;
@@ -714,7 +729,7 @@ function calculateCurrentRewardAmount(
         break;
     }
   } else {
-    // Base reward (no multiplier or device not verified)
+    // Base reward (no active staking multiplier)
     rewardAmount = product.reward.verified;
   }
 
@@ -1174,7 +1189,10 @@ export const doRewards = async (
     const batchPromises = batch.map(async (device) => {
       try {
         // Get product of miner
-        const minerType = device.miner_key.split("-")[0];
+        let minerType = device.miner_key.split("-")[0];
+        if (minerType === "CN" && PRESALE_CN_TO_RDN_OVERRIDES.has(device.miner_key)) {
+          minerType = "RDN";
+        }
         const product = products.find((product) => product.key === minerType);
         if (!product) {
           DEBUG && console.log(`Product not found for miner ${device.miner_key}`);
@@ -1275,6 +1293,15 @@ export const doRewards = async (
           return { device, err: "Device not eligible" };
         }
         
+        // PoC liveness gate (soft gate with grace period)
+        if (shouldValidateLiveness(device.miner_key)) {
+          const liveness = await getPocLiveness(device.miner_key, getSimNow());
+          if (!liveness.isAlive) {
+            DEBUG && console.log(`Device ${device.miner_key} not alive: ${liveness.reason}`);
+            return { device, err: "Device not alive" };
+          }
+        }
+
         // Reward wallet validation
         const minerRewardAddr = device.reward_wallet;
         if (!minerRewardAddr) {

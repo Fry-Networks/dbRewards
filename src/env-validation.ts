@@ -81,6 +81,40 @@ const envConfig: RequiredEnvVars = {
     example: "true",
     validValues: ["true", "false"]
   },
+
+  // PoC Liveness Gate
+  POC_DB_NAME: {
+    required: false,
+    description: "Database name for PoC liveness data",
+    example: "PoC"
+  },
+  POC_LIVENESS_COLLECTION: {
+    required: false,
+    description: "Collection name for PoC installation records",
+    example: "installations"
+  },
+  POC_LIVENESS_THRESHOLD_DAYS: {
+    required: false,
+    description: "Number of days since last_seen_at before a device is considered inactive",
+    example: "7"
+  },
+  POC_LIVENESS_CUTOFF_DATE: {
+    required: false,
+    description: "ISO date after which liveness enforcement begins (empty = grace period)",
+    example: "2026-05-01T00:00:00Z"
+  },
+  POC_REWARD_AEM: {
+    required: false,
+    description: "Enable PoC liveness check for AI Edge Miners (AEM)",
+    example: "true",
+    validValues: ["true", "false"]
+  },
+  POC_REWARD_BM: {
+    required: false,
+    description: "Enable PoC liveness check for Bandwidth Miners (BM)",
+    example: "true",
+    validValues: ["true", "false"]
+  },
   
   REWARD_REPORT_DIR: {
     required: false,
@@ -306,6 +340,11 @@ export function printEnvironmentStatus(): void {
   console.log(`  - Admin Endpoints: ${process.env.ADMIN_ENDPOINTS_ENABLED === 'true' ? 'ENABLED' : 'DISABLED'}`);
   console.log(`  - IP Whitelist: ${process.env.ADMIN_ALLOWED_IPS ? 'CONFIGURED' : 'NOT SET'}`);
   console.log(`  - Dashboard Port: ${process.env.DASHBOARD_PORT || '3001'}`);
+  console.log('\n📡 PoC Liveness Gate:');
+  console.log(`  - Cutoff date: ${process.env.POC_LIVENESS_CUTOFF_DATE || '(none — grace period)'}`);
+  console.log(`  - Threshold: ${process.env.POC_LIVENESS_THRESHOLD_DAYS || '7'} days`);
+  console.log(`  - AEM: ${process.env.POC_REWARD_AEM === 'true' ? 'ENABLED' : 'DISABLED'}`);
+  console.log(`  - BM: ${process.env.POC_REWARD_BM === 'true' ? 'ENABLED' : 'DISABLED'}`);
   
   if (!validation.valid) {
     console.log('\n💡 Fix the errors above before starting the application.');

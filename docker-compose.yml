@@ -26,9 +26,14 @@ services:
       INLINE_WEEKLY_JOBS: "false"
       POC_REWARD_BM: "true" # Enable PoC slot-based rewards for BM devices.
       POC_REWARD_AEM: "true" # Enable PoC slot-based rewards for AEM devices.
+      # PoC Liveness Gate
+      POC_DB_NAME: "PoC"
+      POC_LIVENESS_COLLECTION: "installations"
+      POC_LIVENESS_THRESHOLD_DAYS: "7"
+      POC_LIVENESS_CUTOFF_DATE: ""  # Empty = grace period. Set ISO date to activate gate.
       NEXT_PUBLIC_WEEKLY_REWARDS_ENABLED: "true"
       WEEKLY_CUTOFF_UTC: "2025-09-12T00:00:00.00Z"
-      SIMULATION_ENABLED: "false"
+      SIMULATION_ENABLED: "false" # DO NOT TOUCH - Simulation mode is controlled by the separate dbrewards-sim service, and enabling it here would cause unintended consequences.
       TEST_MODE: "false"
       DEBUG: "false"
       ALERTS_ENABLED: "true"
@@ -55,7 +60,7 @@ services:
     #networks:
     #  - dbrewards-network
     healthcheck:
-      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:30033/health"]
+      test: ["CMD", "pgrep", "-f", "node dist/"]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -101,8 +106,8 @@ services:
       SIMULATION_ENABLED: "true"
       TEST_MODE: "false"
       DEBUG: "false"
-      TIME_ACCEL: 24
-      SIM_START_AT: "2026-01-28T19:05:00Z"
+      TIME_ACCEL: 12
+      SIM_START_AT: "2026-02-20T10:00:00Z"
       ALERTS_ENABLED: "false"
       DASHBOARD_PORT: 30032
       MATURATION_ENABLED: "true"
@@ -129,7 +134,7 @@ services:
   dbrewards-weekly:
     build: .
     container_name: dbrewards-weekly
-    restart: "no"
+    restart: unless-stopped
     network_mode: "host" # Use host network so tailnet access comes from the host (no sidecar needed).
     command: ["node", "dist/scripts/run-weekly-jobs.js"]
     #profiles:
@@ -148,15 +153,20 @@ services:
       VALIDATE_CREDENTIALS_AIR: "false"
       VALIDATE_CREDENTIALS_WATER: "false"
       VALIDATE_CREDENTIALS_WEATHER: "false"
-      NODE_ENV: development
+      NODE_ENV: production
       NODE_OPTIONS: "--max-old-space-size=4096"
       WEEKLY_REWARDS_ENABLED: "true"
       NEXT_PUBLIC_WEEKLY_REWARDS_ENABLED: "true"
       POC_REWARD_BM: "true" # Enable PoC slot-based rewards for BM devices.
       POC_REWARD_AEM: "true" # Enable PoC slot-based rewards for AEM devices.
+      # PoC Liveness Gate
+      POC_DB_NAME: "PoC"
+      POC_LIVENESS_COLLECTION: "installations"
+      POC_LIVENESS_THRESHOLD_DAYS: "7"
+      POC_LIVENESS_CUTOFF_DATE: ""  # Empty = grace period. Set ISO date to activate gate.
       SIMULATION_ENABLED: "false"      
       TIME_ACCEL: 1
-      SIM_START_AT: "2026-01-28T19:05:00Z"
+      SIM_START_AT: "2026-02-20T10:00:00Z"
       TEST_MODE: "false"
       DEBUG: "false"
       ALERTS_ENABLED: "false"

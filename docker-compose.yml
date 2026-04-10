@@ -24,9 +24,8 @@ services:
       NODE_OPTIONS: "--max-old-space-size=8192"
       WEEKLY_REWARDS_ENABLED: "true"
       INLINE_WEEKLY_JOBS: "false"
-      POC_REWARD_BM: "true" # Enable slot-based PoC rewards for BM devices (4 gates).
-      POC_REWARD_AEM: "true" # Enable slot-based PoC rewards for AEM devices (5 gates incl. PoI).
-      POC_REWARD_STANDARD: "true" # Slot-based PoC rewards for all non-AEM/BM types (default: enabled, 2 gates).
+      POC_REWARD_INSTALLER: "true"     # 5 gates: data+online+mac_match+pol+poi (AEM, BM, IDM, ODM, ISM, OSM, IRM, EM, HWM, LWM, RDN, SDN, SVN, CN)
+      POC_REWARD_NON_INSTALLER: "true" # 4 gates: data+online+pol+poi (cameras, weather, AQ monitors — no MAC)
       POC_DB_NAME: "PoC"
       POC_HARDWARE_COLLECTION: "hardware"
       NEXT_PUBLIC_WEEKLY_REWARDS_ENABLED: "true"
@@ -99,8 +98,8 @@ services:
       WEEKLY_REWARDS_ENABLED: "true"
       INLINE_WEEKLY_JOBS: "false"
       NEXT_PUBLIC_WEEKLY_REWARDS_ENABLED: "true"
-      POC_REWARD_BM: "true" # Enable PoC slot-based rewards for BM devices.
-      POC_REWARD_AEM: "true" # Enable PoC slot-based rewards for AEM devices.
+      POC_REWARD_INSTALLER: "true"     # 5 gates: data+online+mac_match+pol+poi
+      POC_REWARD_NON_INSTALLER: "true" # 4 gates: data+online+pol+poi (no MAC)
       SIMULATION_ENABLED: "true"
       TEST_MODE: "false"
       DEBUG: "false"
@@ -155,9 +154,8 @@ services:
       NODE_OPTIONS: "--max-old-space-size=4096"
       WEEKLY_REWARDS_ENABLED: "true"
       NEXT_PUBLIC_WEEKLY_REWARDS_ENABLED: "true"
-      POC_REWARD_BM: "true" # Enable slot-based PoC rewards for BM devices (4 gates).
-      POC_REWARD_AEM: "true" # Enable slot-based PoC rewards for AEM devices (5 gates incl. PoI).
-      POC_REWARD_STANDARD: "true" # Slot-based PoC rewards for all non-AEM/BM types (default: enabled, 2 gates).
+      POC_REWARD_INSTALLER: "true"     # 5 gates: data+online+mac_match+pol+poi (AEM, BM, IDM, ODM, ISM, OSM, IRM, EM, HWM, LWM, RDN, SDN, SVN, CN)
+      POC_REWARD_NON_INSTALLER: "true" # 4 gates: data+online+pol+poi (cameras, weather, AQ monitors — no MAC)
       POC_DB_NAME: "PoC"
       POC_HARDWARE_COLLECTION: "hardware"
       SIMULATION_ENABLED: "false"

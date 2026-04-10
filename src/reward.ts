@@ -218,11 +218,13 @@ const DAILY_MATURATION_ENABLED =
     : MATURATION_ENABLED;
 
 // Slot-based PoC reward gating (case-insensitive env reads).
-// AEM and BM are opt-in (default DISABLED).
-// STANDARD covers all other device types and is enabled by default.
-const POC_REWARD_AEM = process.env.POC_REWARD_AEM?.toLowerCase() === "true";
-const POC_REWARD_BM = process.env.POC_REWARD_BM?.toLowerCase() === "true";
-const POC_REWARD_STANDARD = process.env.POC_REWARD_STANDARD?.toLowerCase() !== "false";
+// INSTALLER (AEM, BM, IDM, ODM, ISM, OSM, IRM, EM, HWM, LWM, RDN, SDN, SVN, CN):
+//   5 gates — data + online + mac_match + pol + poi
+// NON_INSTALLER (cameras, weather, AQ monitors — no MAC):
+//   4 gates — data + online + pol + poi
+// Both categories default ENABLED; set env to "false" for emergency disable.
+const POC_REWARD_INSTALLER = process.env.POC_REWARD_INSTALLER?.toLowerCase() !== "false";
+const POC_REWARD_NON_INSTALLER = process.env.POC_REWARD_NON_INSTALLER?.toLowerCase() !== "false";
 
 function getDaysConsideringTime(startDate: Date, endDate: Date): number {
   // Set both dates to midnight to ignore hour differences
@@ -576,12 +578,11 @@ export const isNodeStaked = (device: Device) => {
 // ────────────────────────────────────────────────────────────────────────────
 // Pro-rates each device's daily reward based on 144 slot validations per day
 // (6 slots/hour × 24 hours). Each slot has gates that vary by category:
-//   - AEM:      data + online + mac_match + pol + poi (5 gates)
-//   - BM:       data + online + mac_match + pol (4 gates) + tools tracking
-//   - STANDARD: data + online (2 gates) — minimum viable for all other types
+//   - INSTALLER:     data + online + mac_match + pol + poi (5 gates)
+//   - NON_INSTALLER: data + online + pol + poi (4 gates) — no MAC on device
 // Fail-closed: no PoC hardware doc → rewardFactor = 0 → zero reward.
 
-type PocRewardCategory = 'AEM' | 'BM' | 'STANDARD';
+type PocRewardCategory = 'INSTALLER' | 'NON_INSTALLER';
 
 type PocSlotSummary = {
   slotsTotal: number;
@@ -621,20 +622,30 @@ const getDevicePrefix = (minerKey: string): string => {
   return minerKey.split('-')[0]?.toUpperCase() || '';
 };
 
-// Returns category for ALL device types — never null. STANDARD is the default
-// for any prefix not explicitly mapped. Fail-closed still applies because the
-// device needs a PoC.hardware doc with slot data to get a non-zero rewardFactor.
+// Non-installer device prefixes: no MAC address, no installer binary.
+// Gated on data + online + pol + poi (4 gates, no mac_match).
+const NON_INSTALLER_PREFIXES = new Set<string>([
+  'IHAQM', 'ILAQM', 'OMAQM', 'IMAQM', 'OHAQM',
+  'OLWQM', 'OHWQM',
+  'AOWSCM', 'AOWCM', 'AIWCM',
+  'AOSCM', 'AISCM',
+  'AOTCM', 'AITCM',
+  'AIWSCM'
+]);
+
+// Returns category for ALL device types — never null. INSTALLER is the default
+// for any prefix not explicitly mapped as NON_INSTALLER. Fail-closed still
+// applies because the device needs a PoC.hardware doc with slot data to get
+// a non-zero rewardFactor.
 const getPocRewardCategory = (minerKey: string): PocRewardCategory => {
   const prefix = getDevicePrefix(minerKey);
-  if (prefix === 'AEM') return 'AEM';
-  if (prefix === 'BM') return 'BM';
-  return 'STANDARD';
+  if (NON_INSTALLER_PREFIXES.has(prefix)) return 'NON_INSTALLER';
+  return 'INSTALLER'; // AEM, BM, ISM, OSM, IDM, ODM, EM, IRM, HWM, LWM, SDN, SVN, RDN, CN, and any new types
 };
 
 const isPocRewardEnabledForCategory = (category: PocRewardCategory): boolean => {
-  if (category === 'AEM') return POC_REWARD_AEM;
-  if (category === 'BM') return POC_REWARD_BM;
-  if (category === 'STANDARD') return POC_REWARD_STANDARD;
+  if (category === 'INSTALLER') return POC_REWARD_INSTALLER;
+  if (category === 'NON_INSTALLER') return POC_REWARD_NON_INSTALLER;
   return false;
 };
 
@@ -669,7 +680,7 @@ const computePocSlotSummary = (
   category: PocRewardCategory
 ): PocSlotSummary => {
   const dayRewards = extractPocDayRewards(doc, dateString);
-  const poiRequired = category === 'AEM';
+  const poiRequired = true; // Both categories require poi
 
   if (!dayRewards) {
     // Fail-closed: no data → zero reward factor
@@ -701,24 +712,21 @@ const computePocSlotSummary = (
 
       // Per-category gate validation
       let gateOk: boolean;
-      if (category === 'AEM') {
+      if (category === 'INSTALLER') {
+        // 5 gates: all including mac_match and poi
         gateOk =
           gates.data === true &&
           gates.online === true &&
           gates.mac_match === true &&
           gates.pol === true &&
           gates.poi === true;
-      } else if (category === 'BM') {
+      } else {
+        // NON_INSTALLER: 4 gates (no mac_match — no MAC address on device)
         gateOk =
           gates.data === true &&
           gates.online === true &&
-          gates.mac_match === true &&
-          gates.pol === true;
-      } else {
-        // STANDARD: minimum viable gates
-        gateOk =
-          gates.data === true &&
-          gates.online === true;
+          gates.pol === true &&
+          gates.poi === true;
       }
 
       if (!gateOk) {
@@ -729,18 +737,16 @@ const computePocSlotSummary = (
       const rawMultiplier = typeof slot.multiplier === 'number' ? slot.multiplier : 0;
       multiplierSum += clampNumber(rawMultiplier, 0, 1);
 
-      // BM-only: track tools per slot for daily average
-      if (category === 'BM') {
-        const rawTools =
-          typeof slot.tools_count === 'number'
-            ? slot.tools_count
-            : Array.isArray(slot.tools_active)
-              ? slot.tools_active.length
-              : null;
-        if (typeof rawTools === 'number' && Number.isFinite(rawTools)) {
-          toolsSum += clampNumber(rawTools, 0, 3);
-          toolsSlots += 1;
-        }
+      // Tools tracking (any device type that reports tools per slot)
+      const rawTools =
+        typeof slot.tools_count === 'number'
+          ? slot.tools_count
+          : Array.isArray(slot.tools_active)
+            ? slot.tools_active.length
+            : null;
+      if (typeof rawTools === 'number' && Number.isFinite(rawTools)) {
+        toolsSum += clampNumber(rawTools, 0, 3);
+        toolsSlots += 1;
       }
     }
   }
@@ -1411,7 +1417,7 @@ export const doRewards = async (
   const currentDate = getSimNow();
   // PoC slot-based rewards target yesterday UTC to avoid partial-day penalties.
   const pocRewardDateString = formatUtcDateString(getYesterdayUtcDate(currentDate));
-  const pocRewardsEnabled = POC_REWARD_AEM || POC_REWARD_BM || POC_REWARD_STANDARD;
+  const pocRewardsEnabled = POC_REWARD_INSTALLER || POC_REWARD_NON_INSTALLER;
   if (pocRewardsEnabled) {
     logSection(`PoC reward date (UTC): ${pocRewardDateString}`);
   }

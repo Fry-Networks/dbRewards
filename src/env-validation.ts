@@ -93,22 +93,16 @@ const envConfig: RequiredEnvVars = {
     description: "Collection name for PoC hardware slot data",
     example: "hardware"
   },
-  POC_REWARD_AEM: {
+  POC_REWARD_INSTALLER: {
     required: false,
-    description: "Enable slot-based PoC rewards for AI Edge Miners (AEM). 5 gates: data + online + mac_match + pol + poi",
+    description: "Enable slot-based PoC rewards for INSTALLER devices (AEM, BM, IDM, ODM, ISM, OSM, IRM, EM, HWM, LWM, RDN, SDN, SVN, CN). 5 gates: data + online + mac_match + pol + poi. Defaults to ENABLED — set to 'false' to disable.",
     example: "true",
     validValues: ["true", "false"]
   },
-  POC_REWARD_BM: {
+  POC_REWARD_NON_INSTALLER: {
     required: false,
-    description: "Enable slot-based PoC rewards for Bandwidth Miners (BM). 4 gates: data + online + mac_match + pol",
+    description: "Enable slot-based PoC rewards for NON_INSTALLER devices (cameras, weather, air/water quality monitors). 4 gates: data + online + pol + poi. Defaults to ENABLED — set to 'false' to disable.",
     example: "true",
-    validValues: ["true", "false"]
-  },
-  POC_REWARD_STANDARD: {
-    required: false,
-    description: "Enable slot-based PoC rewards for STANDARD category (all non-AEM/BM device types). 2 gates: data + online. Defaults to ENABLED — set to 'false' to disable.",
-    example: "false",
     validValues: ["true", "false"]
   },
   
@@ -337,13 +331,11 @@ export function printEnvironmentStatus(): void {
   console.log(`  - IP Whitelist: ${process.env.ADMIN_ALLOWED_IPS ? 'CONFIGURED' : 'NOT SET'}`);
   console.log(`  - Dashboard Port: ${process.env.DASHBOARD_PORT || '3001'}`);
   // Use case-insensitive matching consistent with reward.ts env reads.
-  const aemEnabled = process.env.POC_REWARD_AEM?.toLowerCase() === 'true';
-  const bmEnabled = process.env.POC_REWARD_BM?.toLowerCase() === 'true';
-  const standardEnabled = process.env.POC_REWARD_STANDARD?.toLowerCase() !== 'false';
+  const installerEnabled = process.env.POC_REWARD_INSTALLER?.toLowerCase() !== 'false';
+  const nonInstallerEnabled = process.env.POC_REWARD_NON_INSTALLER?.toLowerCase() !== 'false';
   console.log('\n📡 PoC Slot-Based Rewards (fail-closed, no grace period):');
-  console.log(`  - AEM: ${aemEnabled ? 'ENABLED' : 'DISABLED'}`);
-  console.log(`  - BM: ${bmEnabled ? 'ENABLED' : 'DISABLED'}`);
-  console.log(`  - STANDARD: ${standardEnabled ? 'ENABLED (default)' : 'DISABLED'}`);
+  console.log(`  - INSTALLER (5 gates: data+online+mac+pol+poi): ${installerEnabled ? 'ENABLED (default)' : 'DISABLED'}`);
+  console.log(`  - NON_INSTALLER (4 gates: data+online+pol+poi): ${nonInstallerEnabled ? 'ENABLED (default)' : 'DISABLED'}`);
   
   if (!validation.valid) {
     console.log('\n💡 Fix the errors above before starting the application.');

@@ -71,6 +71,7 @@ export async function backfillClaimedAt(): Promise<void> {
 
   let processed = 0;
   let updated = 0;
+  let skipped = 0;
 
   async function worker(workerId: number) {
     while (true) {
@@ -80,48 +81,28 @@ export async function backfillClaimedAt(): Promise<void> {
       const txId = txIds[i];
       const ts = await getOnChainTime(txId);
       if (ts && !DRY_RUN) {
-        const up1 = await model.updateMany(
-          { 'daily_rewards.tx_id': txId, $or: [
-              { 'daily_rewards.claimed_at': { $exists: false } },
-              { 'daily_rewards.claimed_at': null },
-              { 'daily_rewards.claimed_at': { $type: 'undefined' } }
-            ]
-          },
+        // Use native collection driver to bypass Mongoose adding _id to arrayFilters.
+        // Use $elemMatch in filter to ensure tx_id and missing claimed_at match the SAME array element.
+        const col = model.collection;
+        const up1 = await col.updateMany(
+          { 'daily_rewards': { $elemMatch: { tx_id: txId, claimed_at: { $exists: false } } } },
           { $set: { 'daily_rewards.$[elem].claimed_at': ts } },
-          { arrayFilters: [{ 'elem.tx_id': txId, $or: [
-                { 'elem.claimed_at': { $exists: false } },
-                { 'elem.claimed_at': null },
-                { 'elem.claimed_at': { $type: 'undefined' } }
-              ] }] }
+          { arrayFilters: [{ 'elem.tx_id': txId, 'elem.claimed_at': { $exists: false } }] }
         );
-        const up2 = await model.updateMany(
-          {
-            'weekly_rewards.tx_id': txId,
-            $or: [
-              { 'weekly_rewards.claimed_at': { $exists: false } },
-              { 'weekly_rewards.claimed_at': null },
-              { 'weekly_rewards.claimed_at': { $type: 'undefined' } }
-            ]
-          },
+        const up2 = await col.updateMany(
+          { 'weekly_rewards': { $elemMatch: { tx_id: txId, claimed_at: { $exists: false } } } },
           { $set: { 'weekly_rewards.$[elem].claimed_at': ts } },
-          {
-            arrayFilters: [{
-              'elem.tx_id': txId,
-              $or: [
-                { 'elem.claimed_at': { $exists: false } },
-                { 'elem.claimed_at': null },
-                { 'elem.claimed_at': { $type: 'undefined' } }
-              ]
-            }]
-          }
+          { arrayFilters: [{ 'elem.tx_id': txId, 'elem.claimed_at': { $exists: false } }] }
         );
         updated += (up1.modifiedCount || 0) + (up2.modifiedCount || 0);
+      } else if (!ts) {
+        skipped++;
       }
       // Pace requests
       const jitter = Math.floor(Math.random() * BASE_DELAY_MS);
       await sleep(BASE_DELAY_MS + jitter);
       if (processed % 100 === 0) {
-        console.log(`Progress: ${processed}/${txIds.length} (${Math.round(processed * 100 / txIds.length)}%)`);
+        console.log(`Progress: ${processed}/${txIds.length} (${Math.round(processed * 100 / txIds.length)}%) | updated: ${updated} | skipped: ${skipped}`);
       }
     }
   }
@@ -129,7 +110,7 @@ export async function backfillClaimedAt(): Promise<void> {
   const workers = Array.from({ length: Math.min(CONCURRENCY, txIds.length) }, (_, i) => worker(i));
   await Promise.all(workers);
 
-  console.log(`✅ Backfill complete. txIds processed: ${txIds.length}${DRY_RUN ? ' (dry-run)' : ''}. Updates applied: ${updated}`);
+  console.log(`✅ Backfill complete. txIds processed: ${txIds.length}${DRY_RUN ? ' (dry-run)' : ''}. Updates applied: ${updated}. Skipped (not found on chain): ${skipped}`);
 }
 
 if (require.main === module) {

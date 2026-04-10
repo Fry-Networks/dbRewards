@@ -42,12 +42,9 @@ RUN chown -R dbrewards:nodejs /app
 # Switch to non-root user
 USER dbrewards
 
-# Health check endpoint
+# Health check — verify the node process is running (batch job, no HTTP server)
 HEALTHCHECK --interval=30s --timeout=10s --start-period=40s --retries=3 \
-    CMD wget --no-verbose --tries=1 --spider http://localhost:${DASHBOARD_PORT:-30033}/health || exit 1
-
-# Expose port
-EXPOSE ${DASHBOARD_PORT:-30033}
+    CMD pgrep -f "node dist/" || exit 1
 
 # Start the application with dumb-init + op runtime injection
 ENTRYPOINT ["dumb-init", "/usr/local/bin/op-entrypoint.sh"]

@@ -916,7 +916,7 @@ function getThisFridayStartUTC(ref: Date): Date {
 }
 
 // Compute last full week window (Fri->Thu) and unlockAt (Friday 00:05 UTC)
-function getLastWeekWindowUTC(now: Date): {
+export function getLastWeekWindowUTC(now: Date): {
   weekStart: Date;
   weekEnd: Date;
   unlockAt: Date;
@@ -1373,7 +1373,7 @@ async function sendWeeklyMaturationReport(
 }
 
 // NEW: Weekly roll-up (Friday 00:05 UTC)
-export async function finalizeWeeklyRewards(): Promise<void> {
+export async function finalizeWeeklyRewards(referenceDate?: Date): Promise<void> {
   if (!WEEKLY_REWARDS_ENABLED) {
     return;
   }
@@ -1381,7 +1381,7 @@ export async function finalizeWeeklyRewards(): Promise<void> {
   // Distributed guard so only one instance handles a window; metrics + status live in rewards_job_runs
   await withJobLock('weekly-rollup', ['hourly-processing', 'daily-backup', 'data-validation'], async () => {
     const now = getSimNow();
-    const { weekStart, weekEnd, unlockAt, dateStrings } = getLastWeekWindowUTC(now);
+    const { weekStart, weekEnd, unlockAt, dateStrings } = getLastWeekWindowUTC(referenceDate ?? now);
     const jobKey = `${WEEKLY_ROLLUP_JOB_NAME}:${unlockAt.toISOString()}`;
 
     const JobRunModelToUse = testMode ? TestJobRunModel : JobRunModel;

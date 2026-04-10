@@ -52,7 +52,9 @@ import readline from 'readline/promises';
 import mongoose, { Connection } from 'mongoose';
 import { deviceRewardsSchema, type DeviceReward } from '../db/device-rewards-schema';
 import { devicesSchema, type Device } from '../db/devices-schema';
-import { LEGACY_FRY_ASSET_ID, TFRY_ASSET_ID } from '../reward-totals';
+import { TFRY_ASSET_ID } from '../reward-totals';
+
+const LEGACY_FRY_ASSET_ID = '924268058';
 
 type CliOptions = {
   sourceUri?: string;

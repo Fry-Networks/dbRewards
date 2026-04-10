@@ -9,11 +9,11 @@ A comprehensive reward management system for IoT devices with automated processi
 ### Core Components
 
 - **🎯 Main Reward Engine** (`src/main.ts`) - Hourly automated reward processing
-- **🔧 Reward Audit Tool** (`src/reward-audit.ts`) - Fix incorrect reward amounts
-- **💰 Backpay System** (`src/backpay.ts`) - Generate missing reward records
+- **🔧 Reward Audit Tool** (`src/scripts/reward-audit.ts`) - Fix incorrect reward amounts
+- **💰 Backpay System** (`src/scripts/backpay.ts`) - Generate missing reward records
 - **📊 Performance Monitor** (`src/performance-monitor.ts`) - Database performance tracking
 - **🚨 Health Checks & Alerting** (`src/health-check.ts`, `src/alerting.ts`) - System monitoring
-- **🌐 Web Dashboard** (`src/web-dashboard.ts`) - Administrative interface
+- **🌐 Web Dashboard** (`src/scripts/web-dashboard.ts`) - Administrative interface
 
 ### Database Schemas
 
@@ -30,16 +30,12 @@ A comprehensive reward management system for IoT devices with automated processi
 # Install dependencies
 npm install
 
-# Copy environment configuration
-cp .env.example .env
-# Edit .env with your MongoDB connection string
-```
 
 ### Environment Configuration
 
 ```env
 # Database
-MONGODB_URI=your_mongodb_connection_string
+MONGO_URI=your_mongodb_connection_string
 TEST_MODE=false
 
 # Optional
@@ -74,7 +70,7 @@ npx ts-node src/reward-audit.ts
 TEST_MODE=true npx ts-node src/reward-audit.ts
 ```
 
-**📖 [Complete Audit Tool Guide →](./REWARD_AUDIT_GUIDE.md)**
+**📖 [Complete Audit Tool Guide →](./docs/REWARD_AUDIT_GUIDE.md)**
 
 **Use Cases:**
 - Fix zero-amount rewards from old system bugs
@@ -90,7 +86,7 @@ TEST_MODE=true npx ts-node src/reward-audit.ts
 npx ts-node src/backpay.ts
 ```
 
-**📖 [Complete Backpay Guide →](./BACKPAY_GUIDE.md)**
+**📖 [Complete Backpay Guide →](./docs/BACKPAY_GUIDE.md)**
 
 **Use Cases:**
 - Fill gaps when reward system was down
@@ -132,7 +128,7 @@ Base reward calculation follows this logic:
 
 ### Processing Schedule
 
-- **Hourly Processing**: Every hour at minute 5 (XX:05)
+- **Hourly Processing**: Every hour at minute 15 (XX:15)
 - **Device Distribution**: Hash-based assignment to distribute load across 24 hours
 - **Status Updates**: Automatic "pending" → "claimable" after 30 days
 

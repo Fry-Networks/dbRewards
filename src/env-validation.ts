@@ -82,37 +82,33 @@ const envConfig: RequiredEnvVars = {
     validValues: ["true", "false"]
   },
 
-  // PoC Liveness Gate
+  // PoC Slot-Based Rewards (fail-closed, no grace period)
   POC_DB_NAME: {
     required: false,
-    description: "Database name for PoC liveness data",
+    description: "Database name for PoC slot data",
     example: "PoC"
   },
-  POC_LIVENESS_COLLECTION: {
+  POC_HARDWARE_COLLECTION: {
     required: false,
-    description: "Collection name for PoC installation records",
-    example: "installations"
-  },
-  POC_LIVENESS_THRESHOLD_DAYS: {
-    required: false,
-    description: "Number of days since last_seen_at before a device is considered inactive",
-    example: "7"
-  },
-  POC_LIVENESS_CUTOFF_DATE: {
-    required: false,
-    description: "ISO date after which liveness enforcement begins (empty = grace period)",
-    example: "2026-05-01T00:00:00Z"
+    description: "Collection name for PoC hardware slot data",
+    example: "hardware"
   },
   POC_REWARD_AEM: {
     required: false,
-    description: "Enable PoC liveness check for AI Edge Miners (AEM)",
+    description: "Enable slot-based PoC rewards for AI Edge Miners (AEM). 5 gates: data + online + mac_match + pol + poi",
     example: "true",
     validValues: ["true", "false"]
   },
   POC_REWARD_BM: {
     required: false,
-    description: "Enable PoC liveness check for Bandwidth Miners (BM)",
+    description: "Enable slot-based PoC rewards for Bandwidth Miners (BM). 4 gates: data + online + mac_match + pol",
     example: "true",
+    validValues: ["true", "false"]
+  },
+  POC_REWARD_STANDARD: {
+    required: false,
+    description: "Enable slot-based PoC rewards for STANDARD category (all non-AEM/BM device types). 2 gates: data + online. Defaults to ENABLED — set to 'false' to disable.",
+    example: "false",
     validValues: ["true", "false"]
   },
   
@@ -340,11 +336,14 @@ export function printEnvironmentStatus(): void {
   console.log(`  - Admin Endpoints: ${process.env.ADMIN_ENDPOINTS_ENABLED === 'true' ? 'ENABLED' : 'DISABLED'}`);
   console.log(`  - IP Whitelist: ${process.env.ADMIN_ALLOWED_IPS ? 'CONFIGURED' : 'NOT SET'}`);
   console.log(`  - Dashboard Port: ${process.env.DASHBOARD_PORT || '3001'}`);
-  console.log('\n📡 PoC Liveness Gate:');
-  console.log(`  - Cutoff date: ${process.env.POC_LIVENESS_CUTOFF_DATE || '(none — grace period)'}`);
-  console.log(`  - Threshold: ${process.env.POC_LIVENESS_THRESHOLD_DAYS || '7'} days`);
-  console.log(`  - AEM: ${process.env.POC_REWARD_AEM === 'true' ? 'ENABLED' : 'DISABLED'}`);
-  console.log(`  - BM: ${process.env.POC_REWARD_BM === 'true' ? 'ENABLED' : 'DISABLED'}`);
+  // Use case-insensitive matching consistent with reward.ts env reads.
+  const aemEnabled = process.env.POC_REWARD_AEM?.toLowerCase() === 'true';
+  const bmEnabled = process.env.POC_REWARD_BM?.toLowerCase() === 'true';
+  const standardEnabled = process.env.POC_REWARD_STANDARD?.toLowerCase() !== 'false';
+  console.log('\n📡 PoC Slot-Based Rewards (fail-closed, no grace period):');
+  console.log(`  - AEM: ${aemEnabled ? 'ENABLED' : 'DISABLED'}`);
+  console.log(`  - BM: ${bmEnabled ? 'ENABLED' : 'DISABLED'}`);
+  console.log(`  - STANDARD: ${standardEnabled ? 'ENABLED (default)' : 'DISABLED'}`);
   
   if (!validation.valid) {
     console.log('\n💡 Fix the errors above before starting the application.');

@@ -3,18 +3,23 @@ import mongoose, { Types } from 'mongoose';
 // Sub-schema for individual daily rewards within a device document
 const dailyRewardSchema = new mongoose.Schema({
   date: { type: String, required: true },           // YYYY-MM-DD format for easy queries
-  amount: { type: Number, required: true },         // Reward amount
-  status: { 
-    type: String, 
+  amount: { type: Number, required: true },         // Reward amount (post-PoC pro-rating if applicable)
+  status: {
+    type: String,
     // accruing: daily preview only, aggregated: rolled into weekly
-    enum: ['accruing', 'aggregated', 'pending', 'claimable', 'claimed'], 
-    required: true 
+    enum: ['accruing', 'aggregated', 'pending', 'claimable', 'claimed'],
+    required: true
   },
   asset_id: { type: String, required: true },       // Token asset ID
   created_at: { type: Date, required: true },       // When reward was created
   claimed_at: { type: Date },                       // When reward was claimed (if status = claimed)
   tx_id: { type: String },                          // Transaction ID (if status = claimed)
-  reward_number: { type: Number, required: true }   // Sequential number for this device (1, 2, 3...)
+  reward_number: { type: Number, required: true },  // Sequential number for this device (1, 2, 3...)
+  // PoC slot-based pro-rating fields (optional — set when slot logic is active for the device)
+  poc_reward_factor: { type: Number },              // 0.0-1.0, multiplied against base reward
+  poc_slots_valid: { type: Number },                // Number of slots that passed gates
+  poc_slots_total: { type: Number },                // Always 144 when set
+  poc_category: { type: String }                    // AEM | BM | STANDARD
 });
 
 // Sub-schema for weekly aggregated rewards
@@ -103,6 +108,10 @@ export interface DeviceReward extends mongoose.Document {
     claimed_at?: Date;
     tx_id?: string;
     reward_number: number;
+    poc_reward_factor?: number;
+    poc_slots_valid?: number;
+    poc_slots_total?: number;
+    poc_category?: string;
     _id?: Types.ObjectId;
   }>;
   weekly_rewards: Array<{

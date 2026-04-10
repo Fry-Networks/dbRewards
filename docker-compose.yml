@@ -24,13 +24,11 @@ services:
       NODE_OPTIONS: "--max-old-space-size=8192"
       WEEKLY_REWARDS_ENABLED: "true"
       INLINE_WEEKLY_JOBS: "false"
-      POC_REWARD_BM: "true" # Enable PoC slot-based rewards for BM devices.
-      POC_REWARD_AEM: "true" # Enable PoC slot-based rewards for AEM devices.
-      # PoC Liveness Gate
+      POC_REWARD_BM: "true" # Enable slot-based PoC rewards for BM devices (4 gates).
+      POC_REWARD_AEM: "true" # Enable slot-based PoC rewards for AEM devices (5 gates incl. PoI).
+      POC_REWARD_STANDARD: "true" # Slot-based PoC rewards for all non-AEM/BM types (default: enabled, 2 gates).
       POC_DB_NAME: "PoC"
-      POC_LIVENESS_COLLECTION: "installations"
-      POC_LIVENESS_THRESHOLD_DAYS: "7"
-      POC_LIVENESS_CUTOFF_DATE: ""  # Empty = grace period. Set ISO date to activate gate.
+      POC_HARDWARE_COLLECTION: "hardware"
       NEXT_PUBLIC_WEEKLY_REWARDS_ENABLED: "true"
       WEEKLY_CUTOFF_UTC: "2025-09-12T00:00:00.00Z"
       SIMULATION_ENABLED: "false" # DO NOT TOUCH - Simulation mode is controlled by the separate dbrewards-sim service, and enabling it here would cause unintended consequences.
@@ -157,14 +155,12 @@ services:
       NODE_OPTIONS: "--max-old-space-size=4096"
       WEEKLY_REWARDS_ENABLED: "true"
       NEXT_PUBLIC_WEEKLY_REWARDS_ENABLED: "true"
-      POC_REWARD_BM: "true" # Enable PoC slot-based rewards for BM devices.
-      POC_REWARD_AEM: "true" # Enable PoC slot-based rewards for AEM devices.
-      # PoC Liveness Gate
+      POC_REWARD_BM: "true" # Enable slot-based PoC rewards for BM devices (4 gates).
+      POC_REWARD_AEM: "true" # Enable slot-based PoC rewards for AEM devices (5 gates incl. PoI).
+      POC_REWARD_STANDARD: "true" # Slot-based PoC rewards for all non-AEM/BM types (default: enabled, 2 gates).
       POC_DB_NAME: "PoC"
-      POC_LIVENESS_COLLECTION: "installations"
-      POC_LIVENESS_THRESHOLD_DAYS: "7"
-      POC_LIVENESS_CUTOFF_DATE: ""  # Empty = grace period. Set ISO date to activate gate.
-      SIMULATION_ENABLED: "false"      
+      POC_HARDWARE_COLLECTION: "hardware"
+      SIMULATION_ENABLED: "false"
       TIME_ACCEL: 1
       SIM_START_AT: "2026-02-20T10:00:00Z"
       TEST_MODE: "false"

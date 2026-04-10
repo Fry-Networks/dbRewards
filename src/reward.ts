@@ -58,7 +58,8 @@ import { Product } from "./db/products-schema";
 // NEW: Import device rewards schema for aggregated reward system
 import { type DeviceReward, DeviceRewardModel, TestDeviceRewardModel } from "./db/device-rewards-schema";
 import { getHardwareCredential, type HardwareCredential } from "./db/hardware-credentials";
-import { shouldValidateLiveness, getPocLiveness } from "./db/poc-liveness";
+import { getPocHardwareDocsForDate, type PocHardwareDoc } from "./db/poc-hardware";
+import { PocRewardDailyModel, TestPocRewardDailyModel } from "./db/poc-reward-daily-schema";
 import { sleep } from "./main";
 import { logSection } from "./logger";
 import { getSimNow } from "./time-control";
@@ -216,6 +217,13 @@ const DAILY_MATURATION_ENABLED =
     ? process.env.DAILY_MATURATION_ENABLED === 'true'
     : MATURATION_ENABLED;
 
+// Slot-based PoC reward gating (case-insensitive env reads).
+// AEM and BM are opt-in (default DISABLED).
+// STANDARD covers all other device types and is enabled by default.
+const POC_REWARD_AEM = process.env.POC_REWARD_AEM?.toLowerCase() === "true";
+const POC_REWARD_BM = process.env.POC_REWARD_BM?.toLowerCase() === "true";
+const POC_REWARD_STANDARD = process.env.POC_REWARD_STANDARD?.toLowerCase() !== "false";
+
 function getDaysConsideringTime(startDate: Date, endDate: Date): number {
   // Set both dates to midnight to ignore hour differences
   const start = new Date(
@@ -299,15 +307,17 @@ export const recordReward = async (
 export const recordReward = async (
   device: Device,
   product: Product,
-  amount: number
+  amount: number,
+  rewardDateStringOverride?: string
 ): Promise<boolean> => {
   const availableAmount = amount;
   const currentDate = getSimNow();
-  const dateString = currentDate.toISOString().split('T')[0]; // YYYY-MM-DD format
+  // PoC-gated rewards target yesterday UTC; legacy rewards use today's date.
+  const dateString = rewardDateStringOverride ?? currentDate.toISOString().split('T')[0]; // YYYY-MM-DD format
   const assetId: string = (product.reward.tokens?.reward) || "";
   const isTfryReward = isTfryAsset(assetId);
   const entryStatus: 'accruing' | 'pending' = WEEKLY_REWARDS_ENABLED ? 'accruing' : 'pending';
-  
+
   DEBUG &&
     console.log(
       `Recording device reward ${availableAmount} for miner ${device.miner_key} (${entryStatus}) [sim=${currentDate.toISOString()}]`
@@ -317,11 +327,11 @@ export const recordReward = async (
     // First, get current reward count for this device to calculate reward_number
     const existingDevice: DeviceReward | null = await (testMode ? TestDeviceRewardModel : DeviceRewardModel)
       .findOne({ miner_key: device.miner_key });
-    
+
     const nextRewardNumber = (existingDevice?.reward_count || 0) + 1;
 
-    // Prevent duplicate daily rows for the same date/asset in weekly mode.
-    if (WEEKLY_REWARDS_ENABLED && existingDevice) {
+    // Prevent duplicate daily rows for the same date/asset (all modes).
+    if (existingDevice) {
       const duplicateEntry = existingDevice.daily_rewards?.find(r => r.date === dateString && r.asset_id === assetId);
       if (duplicateEntry) {
         DEBUG && console.log(`Skip duplicate daily entry for ${device.miner_key} on ${dateString} (asset ${assetId}, status ${duplicateEntry.status})`);
@@ -560,6 +570,242 @@ export const isNodeStaked = (device: Device) => {
 
   return false;
 };
+
+// ────────────────────────────────────────────────────────────────────────────
+// SLOT-BASED PoC REWARD LOGIC
+// ────────────────────────────────────────────────────────────────────────────
+// Pro-rates each device's daily reward based on 144 slot validations per day
+// (6 slots/hour × 24 hours). Each slot has gates that vary by category:
+//   - AEM:      data + online + mac_match + pol + poi (5 gates)
+//   - BM:       data + online + mac_match + pol (4 gates) + tools tracking
+//   - STANDARD: data + online (2 gates) — minimum viable for all other types
+// Fail-closed: no PoC hardware doc → rewardFactor = 0 → zero reward.
+
+type PocRewardCategory = 'AEM' | 'BM' | 'STANDARD';
+
+type PocSlotSummary = {
+  slotsTotal: number;
+  slotsValid: number;
+  multiplierSum: number;
+  rewardFactor: number;
+  toolsAvg: number | null;
+  poiRequired: boolean;
+};
+
+type PocRewardDailyEntry = {
+  miner_key: string;
+  date: string;
+  device_type: string;
+  category: PocRewardCategory;
+  slots_total: number;
+  slots_valid: number;
+  multiplier_sum: number;
+  reward_factor: number;
+  tools_avg: number | null;
+  poi_required: boolean;
+  computed_at: Date;
+};
+
+const POC_SLOTS_PER_DAY = 144; // 24h × 6 slots/hour
+
+const clampNumber = (value: number, min: number, max: number): number => {
+  return Math.min(max, Math.max(min, value));
+};
+
+const roundToTwo = (value: number): number => {
+  const rounded = Math.round(value * 100) / 100;
+  return Object.is(rounded, -0) ? 0 : rounded;
+};
+
+const getDevicePrefix = (minerKey: string): string => {
+  return minerKey.split('-')[0]?.toUpperCase() || '';
+};
+
+// Returns category for ALL device types — never null. STANDARD is the default
+// for any prefix not explicitly mapped. Fail-closed still applies because the
+// device needs a PoC.hardware doc with slot data to get a non-zero rewardFactor.
+const getPocRewardCategory = (minerKey: string): PocRewardCategory => {
+  const prefix = getDevicePrefix(minerKey);
+  if (prefix === 'AEM') return 'AEM';
+  if (prefix === 'BM') return 'BM';
+  return 'STANDARD';
+};
+
+const isPocRewardEnabledForCategory = (category: PocRewardCategory): boolean => {
+  if (category === 'AEM') return POC_REWARD_AEM;
+  if (category === 'BM') return POC_REWARD_BM;
+  if (category === 'STANDARD') return POC_REWARD_STANDARD;
+  return false;
+};
+
+const getYesterdayUtcDate = (baseDate: Date): Date => {
+  const utc = new Date(Date.UTC(
+    baseDate.getUTCFullYear(),
+    baseDate.getUTCMonth(),
+    baseDate.getUTCDate()
+  ));
+  utc.setUTCDate(utc.getUTCDate() - 1);
+  return utc;
+};
+
+const formatUtcDateString = (date: Date): string => {
+  return date.toISOString().split('T')[0];
+};
+
+const extractPocDayRewards = (
+  doc: PocHardwareDoc | null | undefined,
+  dateString: string
+): Record<string, any> | null => {
+  if (!doc || !doc.rewards || typeof doc.rewards !== 'object') {
+    return null;
+  }
+  const dayRewards = doc.rewards[dateString];
+  return dayRewards && typeof dayRewards === 'object' ? dayRewards : null;
+};
+
+const computePocSlotSummary = (
+  doc: PocHardwareDoc | null | undefined,
+  dateString: string,
+  category: PocRewardCategory
+): PocSlotSummary => {
+  const dayRewards = extractPocDayRewards(doc, dateString);
+  const poiRequired = category === 'AEM';
+
+  if (!dayRewards) {
+    // Fail-closed: no data → zero reward factor
+    return {
+      slotsTotal: POC_SLOTS_PER_DAY,
+      slotsValid: 0,
+      multiplierSum: 0,
+      rewardFactor: 0,
+      toolsAvg: null,
+      poiRequired
+    };
+  }
+
+  let slotsValid = 0;
+  let multiplierSum = 0;
+  let toolsSum = 0;
+  let toolsSlots = 0;
+
+  const hourKeys = Object.keys(dayRewards).sort((a, b) => Number(a) - Number(b));
+  for (const hourKey of hourKeys) {
+    const hourEntry = dayRewards[hourKey];
+    const slots = Array.isArray(hourEntry?.slots) ? hourEntry.slots : [];
+    for (const slot of slots) {
+      if (!slot || typeof slot !== 'object') {
+        continue;
+      }
+
+      const gates = slot.gates || {};
+
+      // Per-category gate validation
+      let gateOk: boolean;
+      if (category === 'AEM') {
+        gateOk =
+          gates.data === true &&
+          gates.online === true &&
+          gates.mac_match === true &&
+          gates.pol === true &&
+          gates.poi === true;
+      } else if (category === 'BM') {
+        gateOk =
+          gates.data === true &&
+          gates.online === true &&
+          gates.mac_match === true &&
+          gates.pol === true;
+      } else {
+        // STANDARD: minimum viable gates
+        gateOk =
+          gates.data === true &&
+          gates.online === true;
+      }
+
+      if (!gateOk) {
+        continue;
+      }
+
+      slotsValid += 1;
+      const rawMultiplier = typeof slot.multiplier === 'number' ? slot.multiplier : 0;
+      multiplierSum += clampNumber(rawMultiplier, 0, 1);
+
+      // BM-only: track tools per slot for daily average
+      if (category === 'BM') {
+        const rawTools =
+          typeof slot.tools_count === 'number'
+            ? slot.tools_count
+            : Array.isArray(slot.tools_active)
+              ? slot.tools_active.length
+              : null;
+        if (typeof rawTools === 'number' && Number.isFinite(rawTools)) {
+          toolsSum += clampNumber(rawTools, 0, 3);
+          toolsSlots += 1;
+        }
+      }
+    }
+  }
+
+  const rewardFactor = clampNumber(multiplierSum / POC_SLOTS_PER_DAY, 0, 1);
+
+  return {
+    slotsTotal: POC_SLOTS_PER_DAY,
+    slotsValid,
+    multiplierSum,
+    rewardFactor,
+    toolsAvg: toolsSlots > 0 ? roundToTwo(toolsSum / toolsSlots) : null,
+    poiRequired
+  };
+};
+
+const buildPocRewardDailyEntry = (
+  minerKey: string,
+  category: PocRewardCategory,
+  dateString: string,
+  summary: PocSlotSummary,
+  computedAt: Date
+): PocRewardDailyEntry => ({
+  miner_key: minerKey,
+  date: dateString,
+  device_type: getDevicePrefix(minerKey),
+  category,
+  slots_total: summary.slotsTotal,
+  slots_valid: summary.slotsValid,
+  multiplier_sum: summary.multiplierSum,
+  reward_factor: summary.rewardFactor,
+  tools_avg: summary.toolsAvg,
+  poi_required: summary.poiRequired,
+  computed_at: computedAt
+});
+
+const upsertPocRewardSummaries = async (
+  entries: PocRewardDailyEntry[]
+): Promise<number> => {
+  if (entries.length === 0) {
+    return 0;
+  }
+
+  const Model = testMode ? TestPocRewardDailyModel : PocRewardDailyModel;
+  const ops = entries.map((entry) => ({
+    updateOne: {
+      filter: { miner_key: entry.miner_key, date: entry.date },
+      // Idempotent insert so hourly runs don't balloon storage.
+      update: { $setOnInsert: entry },
+      upsert: true
+    }
+  }));
+
+  try {
+    const result = await Model.bulkWrite(ops, { ordered: false });
+    return result.upsertedCount ?? 0;
+  } catch (error) {
+    DEBUG && console.error('PoC daily summary upsert failed:', error);
+    return 0;
+  }
+};
+
+// ────────────────────────────────────────────────────────────────────────────
+// END SLOT-BASED PoC REWARD LOGIC
+// ────────────────────────────────────────────────────────────────────────────
 
 // CONSISTENCY FIX: Add same historical eligibility functions as backpay.ts
 
@@ -957,41 +1203,44 @@ export const recordRewardsBulk = async (
     device: Device;
     product: Product;
     amount: number;
+    rewardDateString?: string;
   }>
 ): Promise<{ success: boolean; errors: ReturnDevice[]; partialSuccess?: boolean; stats: { insertedDevices: number; insertedRows: number; skippedDevices: number } }> => {
   const errors: ReturnDevice[] = [];
   const currentDate = getSimNow();
-  const dateString = currentDate.toISOString().split('T')[0]; // YYYY-MM-DD format
+  const dateString = currentDate.toISOString().split('T')[0]; // YYYY-MM-DD format (default if no override)
   const entryStatus: 'accruing' | 'pending' = WEEKLY_REWARDS_ENABLED ? 'accruing' : 'pending';
-  
+
   DEBUG && console.log(`Processing bulk device rewards for ${rewardBatch.length} devices (device-centric)`);
-  
+
   try {
     // Group rewards by device to handle multiple rewards per device efficiently
     const deviceRewardMap = new Map<string, {
       device: Device;
-      rewards: Array<{ product: Product; amount: number; }>;
+      rewards: Array<{ product: Product; amount: number; rewardDateString?: string }>;
     }>();
-    
+
     // Group rewards by device
-    for (const { device, product, amount } of rewardBatch) {
+    for (const { device, product, amount, rewardDateString } of rewardBatch) {
       try {
         // Validate inputs
         if (!device || !device.miner_key) {
           errors.push({ device, err: "Invalid device data" });
           continue;
         }
-        
+
         if (!product || !product.reward) {
           errors.push({ device, err: "Invalid product data" });
           continue;
         }
-        
-        if (typeof amount !== 'number' || amount <= 0) {
+
+        // Allow zero amounts (slot system pro-rates to 0 for devices with no PoC data).
+        // Only reject NaN/Infinity/negative.
+        if (typeof amount !== 'number' || !Number.isFinite(amount) || amount < 0) {
           errors.push({ device, err: "Invalid reward amount" });
           continue;
         }
-        
+
         const minerKey = device.miner_key;
         if (!deviceRewardMap.has(minerKey)) {
           deviceRewardMap.set(minerKey, {
@@ -999,9 +1248,9 @@ export const recordRewardsBulk = async (
             rewards: []
           });
         }
-        
-        deviceRewardMap.get(minerKey)!.rewards.push({ product, amount });
-        
+
+        deviceRewardMap.get(minerKey)!.rewards.push({ product, amount, rewardDateString });
+
       } catch (itemError) {
         DEBUG && console.error(`Validation failed for device ${device?.miner_key}:`, itemError);
         errors.push({ device, err: "Validation failed" });
@@ -1023,7 +1272,8 @@ export const recordRewardsBulk = async (
         const dailyRewardsToAdd: any[] = [];
         let deviceAddedAny = false;
         const seenDailyKeys = new Set<string>();
-        if (WEEKLY_REWARDS_ENABLED && existingDevice?.daily_rewards) {
+        // Track existing date/asset pairs to prevent duplicate daily rows (all modes).
+        if (existingDevice?.daily_rewards) {
           existingDevice.daily_rewards.forEach(r => {
             if (r?.asset_id && r?.date) {
               seenDailyKeys.add(`${r.asset_id}::${r.date}`);
@@ -1032,23 +1282,23 @@ export const recordRewardsBulk = async (
         }
 
         // Process all rewards for this device
-        for (const { product, amount } of rewards) {
+        for (const { product, amount, rewardDateString } of rewards) {
           if (!WEEKLY_REWARDS_ENABLED) {
             totalPendingIncrease += amount;
           }
           const assetId: string = (product.reward.tokens?.reward) || "";
-          if (WEEKLY_REWARDS_ENABLED) {
-            const key = `${assetId}::${dateString}`;
-            if (seenDailyKeys.has(key)) {
-              DEBUG && console.log(`Skip duplicate daily entry (bulk) for ${minerKey} on ${dateString} (asset ${assetId})`);
-              continue;
-            }
-            seenDailyKeys.add(key);
+          // PoC entries use yesterday UTC; legacy entries use today.
+          const effectiveDate = rewardDateString ?? dateString;
+          const key = `${assetId}::${effectiveDate}`;
+          if (seenDailyKeys.has(key)) {
+            DEBUG && console.log(`Skip duplicate daily entry (bulk) for ${minerKey} on ${effectiveDate} (asset ${assetId})`);
+            continue;
           }
+          seenDailyKeys.add(key);
 
           rewardCount++;
           dailyRewardsToAdd.push({
-            date: dateString,
+            date: effectiveDate,
             amount: amount,
             status: entryStatus,
             asset_id: assetId,
@@ -1159,9 +1409,15 @@ export const doRewards = async (
 ): Promise<{ errors: ReturnDevice[]; summary: AccrualSummary; report: RewardReport }> => {
   const errDevices: ReturnDevice[] = [];
   const currentDate = getSimNow();
+  // PoC slot-based rewards target yesterday UTC to avoid partial-day penalties.
+  const pocRewardDateString = formatUtcDateString(getYesterdayUtcDate(currentDate));
+  const pocRewardsEnabled = POC_REWARD_AEM || POC_REWARD_BM || POC_REWARD_STANDARD;
+  if (pocRewardsEnabled) {
+    logSection(`PoC reward date (UTC): ${pocRewardDateString}`);
+  }
   const BATCH_SIZE = 200; // Process devices in batches for better performance
   const BULK_INSERT_SIZE = 50; // Size for bulk database operations
-  
+
   logSection(`Starting reward processing for ${devices.length} devices in batches of ${BATCH_SIZE} [sim=${currentDate.toISOString()}]`);
   // Aggregated summary across all batches
   let eligibleDevices = 0;
@@ -1180,11 +1436,35 @@ export const doRewards = async (
   for (let i = 0; i < devices.length; i += BATCH_SIZE) {
     const batch = devices.slice(i, i + BATCH_SIZE);
     logSection(`Processing batch ${Math.floor(i/BATCH_SIZE) + 1}/${Math.ceil(devices.length/BATCH_SIZE)} (${batch.length} devices)`);
-    
+
     // Collect valid devices and their rewards for bulk processing
-    const validRewards: Array<{ device: Device; product: Product; amount: number }> = [];
+    const validRewards: Array<{
+      device: Device;
+      product: Product;
+      amount: number;
+      rewardDateString?: string;
+      pocSummary?: PocRewardDailyEntry;
+    }> = [];
     const invalidDevices: ReturnDevice[] = [];
-    
+
+    // Pre-fetch PoC.hardware docs for all PoC-gated devices in this batch.
+    // Pulling only the target day's rewards subtree keeps reads lean.
+    const pocCategoryByKey = new Map<string, PocRewardCategory>();
+    let pocDocsByKey = new Map<string, PocHardwareDoc>();
+    if (pocRewardsEnabled) {
+      const pocKeys: string[] = [];
+      for (const device of batch) {
+        const category = getPocRewardCategory(device.miner_key);
+        if (isPocRewardEnabledForCategory(category)) {
+          pocCategoryByKey.set(device.miner_key, category);
+          pocKeys.push(device.miner_key);
+        }
+      }
+      if (pocKeys.length > 0) {
+        pocDocsByKey = await getPocHardwareDocsForDate(pocKeys, pocRewardDateString);
+      }
+    }
+
     // Process batch with concurrent validation
     const batchPromises = batch.map(async (device) => {
       try {
@@ -1199,8 +1479,15 @@ export const doRewards = async (
           return { device, err: "Product not found" };
         }
 
-        // Hardware validation with granular control
-        if (requiresHardwareMac(device.miner_key)) {
+        // Hardware validation with granular control.
+        // When PoC slot gating is active for this device, the slot system's
+        // mac_match gate covers MAC validation — skip the legacy check.
+        const pocCategoryForValidation = getPocRewardCategory(device.miner_key);
+        const skipLegacyMacValidation = isPocRewardEnabledForCategory(pocCategoryForValidation);
+        if (skipLegacyMacValidation) {
+          DEBUG && console.log(`Skipping legacy MAC validation for ${device.miner_key} (PoC slot gating active)`);
+        }
+        if (requiresHardwareMac(device.miner_key) && !skipLegacyMacValidation) {
           // Check if device has an active exception
           if (device.rewards_exception?.enabled) {
             const now = new Date();
@@ -1287,19 +1574,10 @@ export const doRewards = async (
 
         // CONSISTENCY FIX: Use new eligibility validation - SAME AS BACKPAY
         const eligibilityResult = isDeviceCurrentlyEligible(device, product);
-        
+
         if (!eligibilityResult.eligible) {
           DEBUG && console.log(`Device ${device.miner_key} not eligible: ${eligibilityResult.reason}`);
           return { device, err: "Device not eligible" };
-        }
-        
-        // PoC liveness gate (soft gate with grace period)
-        if (shouldValidateLiveness(device.miner_key)) {
-          const liveness = await getPocLiveness(device.miner_key, getSimNow());
-          if (!liveness.isAlive) {
-            DEBUG && console.log(`Device ${device.miner_key} not alive: ${liveness.reason}`);
-            return { device, err: "Device not alive" };
-          }
         }
 
         // Reward wallet validation
@@ -1327,21 +1605,48 @@ export const doRewards = async (
         }
 
         // CONSISTENCY FIX: Use new reward calculation - SAME AS BACKPAY
-        const rewardAmount = calculateCurrentRewardAmount(device, product, eligibilityResult);
-        
-        if (rewardAmount <= 0) {
+        let rewardAmount = calculateCurrentRewardAmount(device, product, eligibilityResult);
+        let rewardDateStringOverride: string | undefined;
+        let pocSummary: PocRewardDailyEntry | undefined;
+
+        // Apply slot-based PoC reward factor for all gated devices.
+        // Fail-closed: no PoC hardware doc → rewardFactor = 0 → zero reward.
+        const pocCategory = pocCategoryByKey.get(device.miner_key);
+        if (pocCategory) {
+          const pocDoc = pocDocsByKey.get(device.miner_key);
+          const slotSummary = computePocSlotSummary(pocDoc, pocRewardDateString, pocCategory);
+          rewardAmount = roundToTwo(rewardAmount * slotSummary.rewardFactor);
+          rewardDateStringOverride = pocRewardDateString;
+          pocSummary = buildPocRewardDailyEntry(
+            device.miner_key,
+            pocCategory,
+            pocRewardDateString,
+            slotSummary,
+            currentDate
+          );
+        }
+
+        if (!Number.isFinite(rewardAmount) || rewardAmount < 0) {
           DEBUG && console.log(`Invalid reward amount for device ${device.miner_key}`);
           return { device, err: "Invalid reward amount" };
         }
-        
+        const normalizedRewardAmount = Math.max(0, rewardAmount);
+
         // Log device type and eligibility for debugging (first batch only)
         if (i === 0 && batch.indexOf(device) < 10) {
           const deviceType = getDeviceType(device.miner_key);
-          DEBUG && console.log(`Daily: Device ${device.miner_key} (${deviceType}): ${eligibilityResult.reason} -> ${rewardAmount} reward`);
+          DEBUG && console.log(`Daily: Device ${device.miner_key} (${deviceType}): ${eligibilityResult.reason} -> ${normalizedRewardAmount} reward`);
         }
 
         // Return valid reward data for bulk processing
-        return { device, product, amount: rewardAmount, valid: true };
+        return {
+          device,
+          product,
+          amount: normalizedRewardAmount,
+          rewardDateString: rewardDateStringOverride,
+          pocSummary,
+          valid: true
+        };
         
       } catch (error) {
         console.error(`Error validating device ${device.miner_key}: ${error}`);
@@ -1359,7 +1664,9 @@ export const doRewards = async (
           validRewards.push({
             device: result.value.device,
             product: result.value.product,
-            amount: result.value.amount
+            amount: result.value.amount,
+            rewardDateString: result.value.rewardDateString,
+            pocSummary: result.value.pocSummary
           });
           const key = result.value.device.miner_key;
           const amount = typeof result.value.amount === 'number' ? result.value.amount : 0;
@@ -1385,16 +1692,16 @@ export const doRewards = async (
     if (validRewards.length > 0) {
       for (let j = 0; j < validRewards.length; j += BULK_INSERT_SIZE) {
         const bulkChunk = validRewards.slice(j, j + BULK_INSERT_SIZE);
-        
+
         try {
           // Use bulk insert for reward records
           const bulkResult = await recordRewardsBulk(bulkChunk);
-          
+
           if (!bulkResult.success) {
             errDevices.push(...bulkResult.errors);
             continue;
           }
-          
+
           // Add any errors from bulk processing
           errDevices.push(...bulkResult.errors);
           // Aggregate bulk stats
@@ -1402,17 +1709,35 @@ export const doRewards = async (
           insertedRows += bulkResult.stats.insertedRows;
           skippedDuplicates += bulkResult.stats.skippedDevices;
           dbErrors += bulkResult.errors.length;
-          
+
           DEBUG && console.log(`Bulk processed ${bulkResult.stats.insertedRows} accrual rows across ${bulkResult.stats.insertedDevices} devices (skipped duplicates: ${bulkResult.stats.skippedDevices})`);
-          
+
+          // Write PoC daily summaries for successful rewards.
+          // Idempotent inserts via $setOnInsert + unique (miner_key, date) index.
+          const failedKeys = new Set(
+            bulkResult.errors
+              .map((entry) => entry.device?.miner_key)
+              .filter((key): key is string => Boolean(key))
+          );
+          const summariesToWrite = bulkChunk
+            .filter((entry) => entry.pocSummary && !failedKeys.has(entry.device.miner_key))
+            .map((entry) => entry.pocSummary as PocRewardDailyEntry);
+          if (summariesToWrite.length > 0) {
+            const inserted = await upsertPocRewardSummaries(summariesToWrite);
+            DEBUG && console.log(`PoC daily summaries inserted: ${inserted}/${summariesToWrite.length}`);
+          }
+
         } catch (error) {
           console.error(`Bulk processing failed for chunk: ${error}`);
           // Fall back to individual processing for this chunk
-          for (const { device, product, amount } of bulkChunk) {
+          for (const { device, product, amount, rewardDateString, pocSummary } of bulkChunk) {
             try {
-              const result = await recordReward(device, product, amount);
+              const result = await recordReward(device, product, amount, rewardDateString);
               if (!result) {
                 errDevices.push({ device, err: "Recording reward failed" });
+              } else if (pocSummary) {
+                // Write the PoC summary even when bulk insert had to fall back.
+                await upsertPocRewardSummaries([pocSummary]);
               }
             } catch (individualError) {
               errDevices.push({ device, err: "Individual recording failed" });

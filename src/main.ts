@@ -163,6 +163,29 @@ const ensureCollectionsExist = async (
   }
 };
 
+// Explicitly create poc_reward_daily indexes so production doesn't rely on Mongoose autoIndex.
+const ensurePocRewardDailyIndexes = async (db: mongoose.Connection): Promise<void> => {
+  try {
+    await db.collection("poc_reward_daily").createIndex(
+      { miner_key: 1, date: 1 },
+      { unique: true, name: 'unique_poc_reward_daily' }
+    );
+    await db.collection("poc_reward_daily").createIndex(
+      { date: -1 },
+      { name: 'poc_reward_daily_date' }
+    );
+  } catch (err: any) {
+    if (err?.code === 85 || err?.codeName === 'IndexOptionsConflict') {
+      return;
+    }
+    if (err?.code === 11000) {
+      console.error('Failed to enforce poc_reward_daily unique index due to existing duplicates:', err);
+      return;
+    }
+    console.error('Failed to ensure poc_reward_daily indexes:', err);
+  }
+};
+
 // Device hash function for consistent hour assignment
 function hashString(str: string): number {
   let hash = 0;
@@ -382,11 +405,15 @@ const main = async (devicesToProcess?: Device[]): Promise<HourlyRunResult> => {
 
   // OLD_LOGIC_BACKUP: Only ensured old reward collections
   // await ensureCollectionsExist(db, ["rewards", "test-rewards"]);
-  
-  // Ensure aggregated collection exists
+
+  // Ensure aggregated reward collections
   await ensureCollectionsExist(db, [
-    "device-rewards"
+    "device-rewards",
+    "poc_reward_daily"
   ]);
+
+  // Ensure poc_reward_daily indexes (unique on miner_key+date for idempotency)
+  await ensurePocRewardDailyIndexes(db);
 
   const rewardsConfig = await connection.connection
     .collection("configs")

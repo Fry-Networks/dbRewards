@@ -31,3 +31,4 @@ src/scripts/verify-conversion.ts
 # Backup files from Claude Code sessions
 *.bak
 *.bak.*
+src.backup.*/

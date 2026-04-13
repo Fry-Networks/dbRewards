@@ -95,7 +95,7 @@ const envConfig: RequiredEnvVars = {
   },
   POC_REWARD_INSTALLER: {
     required: false,
-    description: "Enable slot-based PoC rewards for INSTALLER devices (AEM, BM, IDM, ODM, ISM, OSM, IRM, EM, HWM, LWM, RDN, SDN, SVN, CN). 5 gates: data + online + mac_match + pol + poi. Defaults to ENABLED — set to 'false' to disable.",
+    description: "Enable slot-based PoC rewards for INSTALLER devices (AEM, BM, IDM, ODM, ISM, OSM, IRM, EM, HWM, LWM, RDN, SDN, SVN, CN). 6 gates: data + online + mac_match + pol + poi + poa. Defaults to ENABLED — set to 'false' to disable.",
     example: "true",
     validValues: ["true", "false"]
   },

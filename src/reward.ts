@@ -219,7 +219,7 @@ const DAILY_MATURATION_ENABLED =
 
 // Slot-based PoC reward gating (case-insensitive env reads).
 // INSTALLER (AEM, BM, IDM, ODM, ISM, OSM, IRM, EM, HWM, LWM, RDN, SDN, SVN, CN):
-//   5 gates — data + online + mac_match + pol + poi
+//   6 gates — data + online + mac_match + pol + poi + poa
 // NON_INSTALLER (cameras, weather, AQ monitors — no MAC):
 //   4 gates — data + online + pol + poi
 // Both categories default ENABLED; set env to "false" for emergency disable.
@@ -578,7 +578,7 @@ export const isNodeStaked = (device: Device) => {
 // ────────────────────────────────────────────────────────────────────────────
 // Pro-rates each device's daily reward based on 144 slot validations per day
 // (6 slots/hour × 24 hours). Each slot has gates that vary by category:
-//   - INSTALLER:     data + online + mac_match + pol + poi (5 gates)
+//   - INSTALLER:     data + online + mac_match + pol + poi + poa (6 gates)
 //   - NON_INSTALLER: data + online + pol + poi (4 gates) — no MAC on device
 // Fail-closed: no PoC hardware doc → rewardFactor = 0 → zero reward.
 
@@ -713,13 +713,14 @@ const computePocSlotSummary = (
       // Per-category gate validation
       let gateOk: boolean;
       if (category === 'INSTALLER') {
-        // 5 gates: all including mac_match and poi
+        // 6 gates: data + online + mac_match + pol + poi + poa (poa required for all INSTALLER types)
         gateOk =
           gates.data === true &&
           gates.online === true &&
           gates.mac_match === true &&
           gates.pol === true &&
-          gates.poi === true;
+          gates.poi === true &&
+          gates.poa === true;
       } else {
         // NON_INSTALLER: 4 gates (no mac_match — no MAC address on device)
         gateOk =

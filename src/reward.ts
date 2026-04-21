@@ -1491,6 +1491,14 @@ export const doRewards = async (
         // mac_match gate covers MAC validation — skip the legacy check.
         const pocCategoryForValidation = getPocRewardCategory(device.miner_key);
         const skipLegacyMacValidation = isPocRewardEnabledForCategory(pocCategoryForValidation);
+        // Phase 5: reward_eligible short-circuit for INSTALLER devices
+        if (pocCategoryForValidation === 'INSTALLER') {
+          const pocDoc = pocDocsByKey.get(device.miner_key);
+          if (pocDoc?.reward_eligible === false) {
+            DEBUG && console.log(`reward_eligible short-circuit: ${device.miner_key} ineligible`);
+            return { device, err: "PoC liveness ineligible" };
+          }
+        }
         if (skipLegacyMacValidation) {
           DEBUG && console.log(`Skipping legacy MAC validation for ${device.miner_key} (PoC slot gating active)`);
         }

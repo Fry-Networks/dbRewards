@@ -3,6 +3,7 @@ import mongoose, { Connection } from "mongoose";
 export interface PocHardwareDoc {
   miner_key?: string;
   rewards?: Record<string, any>;
+  reward_eligible?: boolean;
 }
 
 const POC_DB_NAME = process.env.POC_DB_NAME || "PoC";
@@ -42,7 +43,7 @@ export async function getPocHardwareDocsForDate(
   const docs = await connection
     .collection<PocHardwareDoc>(POC_COLLECTION)
     .find({ miner_key: { $in: minerKeys } })
-    .project({ miner_key: 1, [rewardField]: 1 })
+    .project({ miner_key: 1, [rewardField]: 1, reward_eligible: 1 })
     .toArray();
 
   const byKey = new Map<string, PocHardwareDoc>();

@@ -85,6 +85,7 @@ const minerType = {
   ],
   energy: ["EM"],
   node: ['SDN', 'SVN', 'RDN', 'CN', 'AEM'],
+  virtual: ['VRDN', 'VSDN', 'VSVN'],
 };
 
 type MinerCategory = keyof typeof minerType;

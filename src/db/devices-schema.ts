@@ -82,6 +82,15 @@ export const devicesSchema = new mongoose.Schema({
       type: Date,
     },
   },
+  // -- Virtual mining fields (Phase 1) --
+  virtual: { type: Boolean, default: false },
+  activated: { type: Boolean, default: false },
+  activated_at: { type: Date, default: null },
+  wix_order_id: { type: String, default: null },
+  wix_line_item_id: { type: String, default: null },
+  transitioned_at: { type: Date, default: null },
+  transitioned_to_device: { type: String, default: null },
+  canceled_at: { type: Date, default: null },
 });
 
 export interface Device extends mongoose.Document {
@@ -121,6 +130,15 @@ export interface Device extends mongoose.Document {
     added_at?: Date;
     expires_at?: Date;
   };
+  // Virtual mining
+  virtual?: boolean;
+  activated?: boolean;
+  activated_at?: Date;
+  wix_order_id?: string;
+  wix_line_item_id?: string;
+  transitioned_at?: Date;
+  transitioned_to_device?: string;
+  canceled_at?: Date;
 }
 
 export const DeviceModel = mongoose.model<Device>("devices", devicesSchema);

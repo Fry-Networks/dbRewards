@@ -225,7 +225,7 @@ type HourlyRunResult = {
 };
 
 const DEVICE_FIELDS_FOR_REWARDS =
-  '_id miner_key is_registered reward_wallet verified staked registration node byod rewards_exception hardware created_at reward_multiplier timezone mac_addresses addresses exception_flags last_reward_date last_updated type device_type';
+  '_id miner_key is_registered reward_wallet verified staked registration node byod rewards_exception hardware created_at reward_multiplier timezone mac_addresses addresses exception_flags last_reward_date last_updated type device_type virtual activated';
 
 type AssetSummary = {
   amount: number;

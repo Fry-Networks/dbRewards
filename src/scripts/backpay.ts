@@ -17,13 +17,15 @@ import {
 /**
  * Determine device type from miner key prefix
  */
-function getDeviceType(minerKey: string): 'regular' | 'node' | 'aem' {
+function getDeviceType(minerKey: string): 'regular' | 'node' | 'aem' | 'virtual' {
   const prefix = minerKey.split('-')[0];
   
   if (prefix === 'AEM') {
     return 'aem';
   } else if (['RDN', 'SDN', 'SVN', 'CN'].includes(prefix)) {
     return 'node';
+  } else if (['VRDN', 'VSDN', 'VSVN'].includes(prefix)) {
+    return 'virtual';
   } else {
     return 'regular';
   }

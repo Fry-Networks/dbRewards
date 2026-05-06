@@ -820,13 +820,15 @@ const upsertPocRewardSummaries = async (
 /**
  * Determine device type from miner key prefix - CONSISTENT WITH BACKPAY
  */
-function getDeviceType(minerKey: string): 'regular' | 'node' | 'aem' {
+function getDeviceType(minerKey: string): 'regular' | 'node' | 'aem' | 'virtual' {
   const prefix = minerKey.split('-')[0];
   
   if (prefix === 'AEM') {
     return 'aem';
   } else if (['RDN', 'SDN', 'SVN', 'CN'].includes(prefix)) {
     return 'node';
+  } else if (['VRDN', 'VSDN', 'VSVN'].includes(prefix)) {
+    return 'virtual';
   } else {
     return 'regular';
   }
@@ -1462,6 +1464,7 @@ export const doRewards = async (
     if (pocRewardsEnabled) {
       const pocKeys: string[] = [];
       for (const device of batch) {
+        if (device.virtual) continue; // Virtual devices bypass PoC
         const category = getPocRewardCategory(device.miner_key);
         if (isPocRewardEnabledForCategory(category)) {
           pocCategoryByKey.set(device.miner_key, category);
@@ -1487,13 +1490,18 @@ export const doRewards = async (
           return { device, err: "Product not found" };
         }
 
+        // Virtual device activation gate — skip rewards until user activates
+        if (device.virtual && !device.activated) {
+          return { device, err: "Virtual not activated" };
+        }
+
         // Hardware validation with granular control.
         // When PoC slot gating is active for this device, the slot system's
         // mac_match gate covers MAC validation — skip the legacy check.
         const pocCategoryForValidation = getPocRewardCategory(device.miner_key);
         const skipLegacyMacValidation = isPocRewardEnabledForCategory(pocCategoryForValidation);
         // Phase 5: reward_eligible short-circuit for INSTALLER devices
-        if (pocCategoryForValidation === 'INSTALLER') {
+        if (pocCategoryForValidation === 'INSTALLER' && !device.virtual) {
           const pocDoc = pocDocsByKey.get(device.miner_key);
           if (pocDoc?.reward_eligible === false) {
             DEBUG && console.log(`reward_eligible short-circuit: ${device.miner_key} ineligible`);

@@ -190,6 +190,36 @@ services:
 #  dbrewards-network:
 #    driver: bridge
 
+  wix-sync:
+    build: .
+    container_name: wix-sync
+    restart: unless-stopped
+    network_mode: "host"
+    command: ["node", "dist/scripts/wix-sync.js"]
+    environment:
+      MONGO_URI: "op://dbRewards/MONGO_SELF_URI/mongo_uri"
+      WIX_API_KEY: "op://dbRewards/Wix API/api_key"
+      WIX_SITE_ID: "op://dbRewards/Wix API/site_id"
+      WIX_ACCOUNT_ID: "op://dbRewards/Wix API/account_id"
+      SYNC_INTERVAL_MS: "900000"
+      HEALTH_PORT: "8085"
+      NODE_ENV: "production"
+    volumes:
+      - /etc/ssl/mongo/ca/certs/mongo-ca.crt:/etc/ssl/mongo/mongo-ca.crt:ro
+    secrets:
+      - op_service_account_token
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:8085/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 15s
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "5m"
+        max-file: "2"
+
 secrets:
   op_service_account_token:
     file: /etc/opt/dbrewards/op_service_account_token

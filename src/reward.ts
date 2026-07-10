@@ -65,14 +65,16 @@ import { logSection } from "./logger";
 import { getSimNow } from "./time-control";
 import { validateMacAddress } from "./security/mac-validator";
 import { type RewardReport, type RewardReportEntry } from "./reporting/reward-report";
-import { applyTfryDelta, isTfryAsset } from "./reward-totals";
+import { applyTfryDelta, isTfryAsset, FRY3_ASSET_ID } from "./reward-totals";
 
 const minerType = {
   weather: [ "HWM", "LWM" ],
   air: ["IHAQM", "ILAQM", "OMAQM", "IMAQM", "OHAQM"],
   water: ["OLWQM", "OHWQM"],
   radiation: ["IRM"],
-  hardware: ["ISM", "OSM", "BM", "IDM", "ODM"],
+  hardware: ["ISM", "OSM", "BM", "IDM", "ODM",
+  "FEM"
+  ],
   camera: [
     'AOWSCM',
     'AOWCM',
@@ -112,6 +114,7 @@ const MAC_REQUIRED_PREFIXES = new Set<string>([
   'RDN',
   'CN',
   'AEM',
+  'FEM',
   'BM',
   'ISM',
   'OSM',
@@ -122,7 +125,7 @@ const MAC_REQUIRED_PREFIXES = new Set<string>([
 // Granular validation control groups
 const AEM_DEVICES = new Set<string>(['AEM']);
 const NODE_DEVICES = new Set<string>(['CN', 'SDN', 'RDN', 'SVN']);
-const MINER_DEVICES = new Set<string>(['BM', 'ISM', 'OSM', 'IDM', 'ODM']);
+const MINER_DEVICES = new Set<string>(['BM', 'ISM', 'OSM', 'IDM', 'ODM', 'FEM']);
 
 // Future credential validation groups (API keys/tokens, etc.)
 const RADIATION_DEVICES = new Set<string>(['IRM']);
@@ -209,6 +212,56 @@ interface ReturnDevice {
 }
 
 const testMode = process.env.TEST_MODE && process.env.TEST_MODE === "true";
+
+/**
+ * Get the reward asset ID based on the current mode.
+ * FRY3 mode: all devices use FRY3_ASSET_ID
+ * FRY2 mode: use product-defined token
+ */
+
+// Multi-token reward entry for new rewards[] array support
+interface RewardTokenEntry {
+  asa_id: string;
+  amount: number;
+  name?: string;
+}
+
+// Get all reward tokens for a product/mode — supports both new rewards[] array and legacy scalar
+function getRewardAssetsForMode(product: any, rewardMode?: string): RewardTokenEntry[] {
+  const mode = rewardMode || 'FRY2';
+  
+  if (mode === 'FRY3') {
+    return [{ asa_id: FRY3_ASSET_ID, amount: product.reward?.tokens?.reward_amount || 0, name: 'FRY3' }];
+  }
+  
+  // Multi-token: use rewards[] array if present
+  const rewards = product.reward?.tokens?.rewards;
+  if (rewards && Array.isArray(rewards) && rewards.length > 0) {
+    return rewards.map((r: any) => ({ 
+      asa_id: r.asa_id, 
+      amount: r.amount, 
+      name: r.name 
+    }));
+  }
+  
+  // Backwards compat: wrap scalar into single-element array
+  const scalarAsaId = product.reward?.tokens?.reward || '';
+  const scalarAmount = product.reward?.tokens?.reward_amount || 0;
+  if (!scalarAsaId) return [];
+  return [{ asa_id: scalarAsaId, amount: scalarAmount }];
+}
+function getRewardAssetForMode(
+  productAssetId: string,
+  rewardMode?: string
+): string {
+  const mode = rewardMode || 'FRY2';
+  if (mode === 'FRY3') {
+    return FRY3_ASSET_ID;
+  }
+  return productAssetId || '';
+}
+
+
 const DEBUG = process.env.DEBUG && process.env.DEBUG === "true";
 const WEEKLY_REWARDS_ENABLED = process.env.WEEKLY_REWARDS_ENABLED === "true";
 // Maturation controls (mirror main.ts logic to keep behavior consistent)
@@ -306,7 +359,7 @@ export const recordReward = async (
 };
 */
 
-// NEW: Device-centric reward recording - aggregates rewards per device instead of individual documents
+// NEW: Device-centric reward recording - aggregates rewards per device with multi-token support
 export const recordReward = async (
   device: Device,
   product: Product,
@@ -317,13 +370,19 @@ export const recordReward = async (
   const currentDate = getSimNow();
   // PoC-gated rewards target yesterday UTC; legacy rewards use today's date.
   const dateString = rewardDateStringOverride ?? currentDate.toISOString().split('T')[0]; // YYYY-MM-DD format
-  const assetId: string = (product.reward.tokens?.reward) || "";
-  const isTfryReward = isTfryAsset(assetId);
   const entryStatus: 'accruing' | 'pending' = WEEKLY_REWARDS_ENABLED ? 'accruing' : 'pending';
+
+  // Get all reward tokens for this product (handles both new rewards[] and legacy scalar)
+  const rewardTokens = getRewardAssetsForMode(product, undefined);
+  
+  if (rewardTokens.length === 0) {
+    DEBUG && console.log(`No reward tokens configured for product ${product.key}`);
+    return false;
+  }
 
   DEBUG &&
     console.log(
-      `Recording device reward ${availableAmount} for miner ${device.miner_key} (${entryStatus}) [sim=${currentDate.toISOString()}]`
+      `Recording device reward ${availableAmount} for miner ${device.miner_key} (${entryStatus}) [sim=${currentDate.toISOString()}] tokens=${rewardTokens.length}`
     );
 
   try {
@@ -333,40 +392,65 @@ export const recordReward = async (
 
     const nextRewardNumber = (existingDevice?.reward_count || 0) + 1;
 
-    // Prevent duplicate daily rows for the same date/asset (all modes).
-    if (existingDevice) {
-      const duplicateEntry = existingDevice.daily_rewards?.find(r => r.date === dateString && r.asset_id === assetId);
-      if (duplicateEntry) {
-        DEBUG && console.log(`Skip duplicate daily entry for ${device.miner_key} on ${dateString} (asset ${assetId}, status ${duplicateEntry.status})`);
-        return true;
-      }
-    }
-    
-    // Use findOneAndUpdate with upsert to create or update device reward document
-    // Build dynamic update object based on weekly flag
+    // Loop over each reward token and create daily entry
+    const dailyRewardEntries = [];
     const incFields: Record<string, number> = { reward_count: 1 };
-    if (!WEEKLY_REWARDS_ENABLED) {
-      if (isTfryReward) {
-        applyTfryDelta(incFields, { pending: availableAmount });
-      } else {
-        incFields.total_pending = availableAmount;
+    let tokenIndex = 0;
+
+    for (const token of rewardTokens) {
+      const assetId = token.asa_id;
+      
+      // Check for duplicate daily rows for the same date/asset
+      if (existingDevice) {
+        const duplicateEntry = existingDevice.daily_rewards?.find(r => r.date === dateString && r.asset_id === assetId);
+        if (duplicateEntry) {
+          DEBUG && console.log(`Skip duplicate daily entry for ${device.miner_key} on ${dateString} (asset ${assetId}, status ${duplicateEntry.status})`);
+          continue; // Skip this token, move to next
+        }
       }
+
+      // Calculate amount for this token (if multiple tokens, distribute proportionally or use fixed)
+      // For now, use the token's configured amount; caller can adjust if needed
+      const tokenAmount = token.amount !== undefined ? token.amount : availableAmount;
+      
+      // Build daily reward entry
+      dailyRewardEntries.push({
+        date: dateString,
+        amount: tokenAmount,
+        status: entryStatus,
+        asset_id: assetId,
+        created_at: currentDate,
+        reward_number: nextRewardNumber + tokenIndex
+      });
+
+      // Update accumulators based on asset type
+      if (!WEEKLY_REWARDS_ENABLED) {
+        if (isTfryAsset(assetId)) {
+          applyTfryDelta(incFields, { pending: tokenAmount });
+        } else {
+          // For non-tFRY tokens, increment generic total_pending
+          incFields.total_pending = (incFields.total_pending || 0) + tokenAmount;
+          // Also increment token_totals accumulator
+          incFields[`token_totals.${assetId}.pending`] = (incFields[`token_totals.${assetId}.pending`] || 0) + tokenAmount;
+        }
+      }
+
+      tokenIndex++;
     }
 
+    if (dailyRewardEntries.length === 0) {
+      DEBUG && console.log(`All tokens skipped for ${device.miner_key} on ${dateString} (duplicates)`);
+      return true;
+    }
+
+    // Use findOneAndUpdate with upsert to create or update device reward document
     const result = await (testMode ? TestDeviceRewardModel : DeviceRewardModel)
       .findOneAndUpdate(
         { miner_key: device.miner_key },
         {
           $inc: incFields,
           $push: {
-            daily_rewards: {
-              date: dateString,
-              amount: availableAmount,
-              status: entryStatus,
-              asset_id: assetId,
-              created_at: currentDate,
-              reward_number: nextRewardNumber
-            }
+            daily_rewards: { $each: dailyRewardEntries }
           },
           $set: {
             last_updated: currentDate,
@@ -375,7 +459,8 @@ export const recordReward = async (
           $setOnInsert: {
             first_reward_date: currentDate,
             total_claimable: 0,
-            total_claimed: 0
+            total_claimed: 0,
+            token_totals: {}
           }
         },
         { 
@@ -390,7 +475,7 @@ export const recordReward = async (
       return false;
     }
 
-    DEBUG && console.log(`Successfully recorded device reward #${nextRewardNumber} for ${device.miner_key}`);
+    DEBUG && console.log(`Successfully recorded device reward #${nextRewardNumber} for ${device.miner_key} (${dailyRewardEntries.length} tokens)`);
     return true;
     
   } catch (error) {
@@ -703,7 +788,13 @@ const computePocSlotSummary = (
   const hourKeys = Object.keys(dayRewards).sort((a, b) => Number(a) - Number(b));
   for (const hourKey of hourKeys) {
     const hourEntry = dayRewards[hourKey];
-    const slots = Array.isArray(hourEntry?.slots) ? hourEntry.slots : [];
+    // hardwareapi writes rewards[date][hour] as a bare slot ARRAY (rewards.DATE.HOUR[idx]);
+    // legacy shape nested the array under .slots — accept both.
+    const slots = Array.isArray(hourEntry)
+      ? hourEntry
+      : Array.isArray(hourEntry?.slots)
+        ? hourEntry.slots
+        : [];
     for (const slot of slots) {
       if (!slot || typeof slot !== 'object') {
         continue;
@@ -959,6 +1050,42 @@ function isDeviceCurrentlyEligible(
  * Calculate current reward amount based on device eligibility - CONSISTENT WITH BACKPAY  
  * This accounts for whether verification staking is currently active
  */
+// B1: Admin-configurable stake tier multipliers from PoC.versions
+// Loaded once at doRewards() startup; safe fallback to hardcoded values if missing.
+let _stakeTiersCache: Record<string, Record<string, number>> = {};
+
+async function _loadStakeTiers(): Promise<void> {
+    try {
+        const mongoose = require('mongoose');
+        const pocDb = mongoose.connection.useDb('PoC');
+        const versionsCol = pocDb.collection('versions');
+        const docs = await versionsCol.find({}).toArray();
+        const cache: Record<string, Record<string, number>> = {};
+        for (const doc of docs) {
+            if (doc.miner_code && doc.stake_tiers) {
+                const tierMults: Record<string, number> = {};
+                for (const [key, val] of Object.entries(doc.stake_tiers as Record<string, any>)) {
+                    if (val && typeof val.multiplier === 'number') {
+                        tierMults[key] = val.multiplier;
+                    }
+                }
+                cache[doc.miner_code] = tierMults;
+            }
+        }
+        _stakeTiersCache = cache;
+    } catch (e) {
+        // safe fallback: cache stays empty -> hardcoded values used
+    }
+}
+
+function _getStakeMult(minerCode: string, tierKey: string, fallback: number): number {
+    const tiers = _stakeTiersCache[minerCode];
+    if (tiers && typeof tiers[tierKey] === 'number') {
+        return tiers[tierKey];
+    }
+    return fallback;
+}
+
 function calculateCurrentRewardAmount(
   device: Device, 
   product: Product,
@@ -974,10 +1101,10 @@ function calculateCurrentRewardAmount(
   if (eligibilityResult.hasVerificationMultiplier) {
     switch (device.staked?.type) {
       case "one":
-        rewardAmount = Math.round(product.reward.verified * 100 * 1.5) / 100;
+        rewardAmount = Math.round(product.reward.verified * 100 * _getStakeMult(device.miner_key.split("-")[0], "24h", 1.5)) / 100;
         break;
       case "two":
-        rewardAmount = Math.round(product.reward.verified * 100 * 3.0) / 100;
+        rewardAmount = Math.round(product.reward.verified * 100 * _getStakeMult(device.miner_key.split("-")[0], "6mo", 3.0)) / 100;
         break;
       default:
         // Invalid staking type - use base reward
@@ -1418,6 +1545,8 @@ export const doRewards = async (
   products: Product[]
 ): Promise<{ errors: ReturnDevice[]; summary: AccrualSummary; report: RewardReport }> => {
   const errDevices: ReturnDevice[] = [];
+  // B1: Load admin-configured stake tier multipliers from PoC.versions
+  await _loadStakeTiers();
   const currentDate = getSimNow();
   // PoC slot-based rewards target yesterday UTC to avoid partial-day penalties.
   const pocRewardDateString = formatUtcDateString(getYesterdayUtcDate(currentDate));
@@ -1648,6 +1777,14 @@ export const doRewards = async (
             slotSummary,
             currentDate
           );
+        }
+
+        // FEM proportion multiplier — clamp to [0,1] to prevent reward inflation
+        const pocDocFem = pocDocsByKey.get(device.miner_key);
+        if (getDevicePrefix(device.miner_key) === "FEM" && pocDocFem) {
+          const rawProportion = (pocDocFem as any)?.proportion ?? 1.0;
+          const proportion = Math.max(0, Math.min(1, typeof rawProportion === 'number' ? rawProportion : 1.0));
+          rewardAmount = roundToTwo(rewardAmount * proportion);
         }
 
         if (!Number.isFinite(rewardAmount) || rewardAmount < 0) {

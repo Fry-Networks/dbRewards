@@ -58,6 +58,16 @@ export const deviceRewardsSchema = new mongoose.Schema({
   total_pending: { type: Number, default: 0 },                // Sum of all pending rewards
   total_claimable: { type: Number, default: 0 },              // Sum of all claimable rewards
   total_claimed: { type: Number, default: 0 },                // Sum of all claimed rewards
+  token_totals: {
+    type: Map,
+    of: {
+      pending: { type: Number, default: 0 },
+      claimable: { type: Number, default: 0 },
+      claimed: { type: Number, default: 0 },
+      aggregated: { type: Number, default: 0 }
+    },
+    default: {}
+  },
   daily_rewards: [dailyRewardSchema],                         // Array of all rewards for this device (daily accrual)
   weekly_rewards: [weeklyRewardSchema],                       // Array of aggregated weekly rewards
   last_updated: { type: Date, default: Date.now },           // Last modification timestamp
@@ -99,6 +109,12 @@ export interface DeviceReward extends mongoose.Document {
   total_pending: number;
   total_claimable: number;
   total_claimed: number;
+  token_totals?: Map<string, {
+    pending: number;
+    claimable: number;
+    claimed: number;
+    aggregated: number;
+  }>;
   daily_rewards: Array<{
     date: string;                                           // YYYY-MM-DD format
     amount: number;

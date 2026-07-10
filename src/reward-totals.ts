@@ -1,6 +1,7 @@
 export const TFRY_ASSET_ID = '2681521901';
 export const FNODE_ASSET_ID = '2485202024';
 export const FRY20_ASSET_ID = '2485314946';
+export const FRY3_ASSET_ID = '3612979527';
 
 export type TfryDelta = {
   pending?: number;
@@ -66,4 +67,28 @@ export function applyTfryDelta(target: Record<string, number>, delta: TfryDelta)
   if (totalDelta !== 0) {
     bump('tfry_total', totalDelta);
   }
+}
+
+// Generic aggregation function for any asset by ID
+export function aggregateRewardsByAsset(
+  dailyRewards: Array<{ asset_id: string; amount: number; status: string }>,
+  targetAssetId: string
+): { pending: number; claimable: number; claimed: number; aggregated: number } {
+  const result = { pending: 0, claimable: 0, claimed: 0, aggregated: 0 };
+  
+  for (const reward of dailyRewards) {
+    if (reward.asset_id === targetAssetId) {
+      if (reward.status === 'pending' || reward.status === 'accruing') {
+        result.pending += reward.amount;
+      } else if (reward.status === 'claimable') {
+        result.claimable += reward.amount;
+      } else if (reward.status === 'claimed') {
+        result.claimed += reward.amount;
+      } else if (reward.status === 'aggregated') {
+        result.aggregated += reward.amount;
+      }
+    }
+  }
+  
+  return result;
 }

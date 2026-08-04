@@ -1633,6 +1633,19 @@ export async function finalizeWeeklyRewards(referenceDate?: Date): Promise<void>
         }
 
         if (!weeklyEntries.length) {
+          // Devices that earned nothing this window still have to leave 'accruing',
+          // otherwise their daily previews stay open forever and latch the health alarm.
+          try {
+            await Model.updateOne(
+              { _id: doc._id },
+              { $set: { 'daily_rewards.$[elem].status': 'aggregated', last_updated: now } },
+              { arrayFilters: [{ 'elem.status': 'accruing', 'elem.date': { $in: dateStrings } }] },
+            );
+          } catch (error) {
+            metrics.errors += 1;
+            const identifier = doc.miner_key ?? doc._id.toHexString();
+            errorMessages.push(`${identifier}: ${(error as Error).message || error}`);
+          }
           continue;
         }
 

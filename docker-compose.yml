@@ -1,5 +1,8 @@
 services:
   dbrewards:
+    dns:
+      - 100.100.100.100
+      - 1.1.1.1
     build: .
     container_name: dbrewards-prod
     restart: unless-stopped
@@ -129,6 +132,9 @@ services:
         max-file: "2"
 
   dbrewards-weekly:
+    dns:
+      - 100.100.100.100
+      - 1.1.1.1
     build: .
     container_name: dbrewards-weekly
     restart: unless-stopped
@@ -191,6 +197,9 @@ services:
 #    driver: bridge
 
   wix-sync:
+    dns:
+      - 100.100.100.100
+      - 1.1.1.1
     build: .
     container_name: wix-sync
     restart: unless-stopped

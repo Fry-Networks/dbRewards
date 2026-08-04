@@ -47,7 +47,10 @@
     "convert-legacy-fry": "tsc && node dist/scripts/convert-legacy-fry.js",
     "copy-products": "tsc && node dist/scripts/copy-products.js",
     "verify-conversion": "tsc && node dist/scripts/verify-conversion.js",
-    "weekly-jobs": "tsc && node dist/scripts/run-weekly-jobs.js"
+    "weekly-jobs": "tsc && node dist/scripts/run-weekly-jobs.js",
+    "setup-ffg-mongo": "tsc && node dist/scripts/setup-ffg-mongo.js",
+    "ffg:scan": "tsc && node dist/scripts/ffg-fee-scanner.js",
+    "ffg:distribute": "tsc && node dist/scripts/ffg-distribute.js"
   },
   "dependencies": {
     "algosdk": "^1.24.0",

@@ -119,6 +119,11 @@ async function healthCheck(): Promise<HealthStatus> {
     }
     
     // NEW: Check for zero amount rewards in device-rewards
+    // Only zero-amount previews still 'accruing' past the weekly roll-up window are anomalous;
+    // a device that simply earned nothing produces zero-amount dailies by design.
+    const staleAccrualCutoff = new Date(Date.now() - 8 * 24 * 60 * 60 * 1000)
+      .toISOString()
+      .slice(0, 10);
     const zeroAmountResult = await (testMode ? TestDeviceRewardModel : DeviceRewardModel)
       .aggregate([
         {
@@ -126,7 +131,9 @@ async function healthCheck(): Promise<HealthStatus> {
         },
         {
           $match: {
-            "daily_rewards.amount": 0
+            "daily_rewards.amount": 0,
+            "daily_rewards.status": "accruing",
+            "daily_rewards.date": { $lt: staleAccrualCutoff }
           }
         },
         {
@@ -136,7 +143,7 @@ async function healthCheck(): Promise<HealthStatus> {
     
     const zeroAmountCount = zeroAmountResult[0]?.total || 0;
     if (zeroAmountCount > 0) {
-      issues.push(`${zeroAmountCount} rewards with zero amount`);
+      issues.push(`${zeroAmountCount} zero-amount daily rewards stuck in 'accruing' past the roll-up window`);
     }
     
     const systemStatus = issues.length === 0 ? 'HEALTHY' : 

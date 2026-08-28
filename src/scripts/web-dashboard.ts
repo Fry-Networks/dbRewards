@@ -631,7 +631,7 @@ app.get('/admin/weekly', adminAuth, (req, res) => {
   `);
 });
 
-app.get('/api/alerts/config', async (req, res) => {
+app.get('/api/alerts/config', adminAuth, async (req, res) => {
   try {
     const config = alertingSystem.getConfig();
     res.json({
@@ -644,7 +644,7 @@ app.get('/api/alerts/config', async (req, res) => {
   }
 });
 
-app.post('/api/alerts/test', async (req, res) => {
+app.post('/api/alerts/test', createRateLimitMiddleware('admin'), adminAuth, async (req, res) => {
   try {
     await alertingSystem.sendTestAlert();
     res.json({ success: true, message: 'Test alert sent' });
